@@ -39,16 +39,20 @@ Active work items grouped by development stage. Mark done with `[x]` but keep en
 
 ## Stage 4 — Orchestrator (CLI)
 
-- [ ] Implement `Orchestrator` class with intent classification and routing
-- [ ] Persona system with tiered loading and token budgeting (ADR-005)
-  - `persona/core.md` always loaded, lower-priority tiers shed under budget pressure
-  - Warn if total persona exceeds configured token budget
-- [ ] Technical query delegation — clean agent call without persona overhead (ADR-006)
-- [ ] Filesystem tools — read/write/list/search within mounted volumes (ADR-003)
-- [ ] Code request tool — write structured change requests to `/app/code-requests/` (ADR-004)
-- [ ] Response logging to mounted volume (ADR-009)
-- [ ] Session state management (current mode, last scene summary, pending revision)
-- [ ] CLI entry point: `python -m src.main`
+- [x] Implement `Orchestrator` class with tool-use loop and routing
+  - 8 tools: query_lore, write_scene, read_file, write_file, list_files, search_files, request_code_change, delegate_technical
+  - Intent routing handled by the model via tool selection (no manual classifier needed)
+- [x] Persona system with tiered loading and token budgeting (ADR-005)
+  - Loads core.md, quirks.md, references.md, extended.md in priority order
+  - Stops loading when token budget exceeded, logs warning
+  - Sample persona files created in persona/
+- [x] Technical query delegation — clean agent call without persona overhead (ADR-006)
+- [x] Filesystem tools — read/write/list/search within mounted volumes (ADR-003)
+  - Path resolution with escape prevention (can't traverse outside content dirs)
+- [x] Code request tool — writes structured markdown with frontmatter to code-requests/ (ADR-004)
+- [x] Response logging to story/logs/ directory (ADR-009)
+- [x] Conversation history maintained in memory across turns
+- [x] CLI entry point: `python -m src.main`
 - [ ] Full routing test: lore question → Librarian, scene request → Writer, technical question → delegated, planning → discussion mode
 
 ## Stage 5 — Web Wrapper & Docker
