@@ -1,5 +1,6 @@
 """Configuration loading from config.yaml and environment."""
 
+import os
 from pathlib import Path
 from typing import Literal
 
@@ -53,9 +54,9 @@ def load_config(
     else:
         load_dotenv()  # Searches current dir and parents
 
-    # Load YAML config
+    # Load YAML config — CONFIG_PATH env var takes precedence (used in Docker)
     if config_path is None:
-        config_path = Path("config.yaml")
+        config_path = Path(os.environ.get("CONFIG_PATH", "config.yaml"))
 
     if config_path.exists():
         with open(config_path) as f:

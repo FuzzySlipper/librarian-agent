@@ -57,14 +57,19 @@ Active work items grouped by development stage. Mark done with `[x]` but keep en
 
 ## Stage 5 — Web Wrapper & Docker
 
-- [ ] FastAPI server in `src/web/server.py`
-  - Sync SDK calls need `run_in_executor` or sync adapter (ADR-008)
-- [ ] Simple mobile-friendly web UI — text in, text out
-- [ ] Dockerfile and docker-compose.yaml
-  - Lore mounted read-only, story read-write, code-requests read-write
-  - No secrets at build time, `.env` mounted at runtime
-- [ ] Test: accessible from iPad/phone on same WiFi
-- [ ] Add to home screen for app-like experience
+- [x] FastAPI server in `src/web/server.py`
+  - Sync Orchestrator calls wrapped in `run_in_executor` (ADR-008)
+  - POST /api/chat, GET /api/status, GET / (UI)
+- [x] Simple mobile-friendly web UI — inline HTML, dark theme, responsive
+  - Auto-resize textarea, Enter to send, Shift+Enter for newline
+  - Response type badges (prose, lore_answer, etc.)
+  - apple-mobile-web-app-capable for home screen install
+- [x] Dockerfile and docker-compose.yaml
+  - Lore mounted read-only, story and code-requests read-write
+  - No secrets at build time, env_file mounted at runtime
+  - CONTENT_DIR env var for flexible content location
+- [ ] Test: build and run container, verify accessible from other devices
+- [ ] Test: add to iPad home screen for app-like experience
 
 ## Future / When Needed
 
