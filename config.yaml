@@ -1,0 +1,21 @@
+provider: anthropic
+
+models:
+  librarian: claude-haiku-4-5-20251001
+  prose_writer: claude-sonnet-4-6
+  orchestrator: claude-sonnet-4-6
+
+librarian:
+  max_tokens_per_query: 1024
+
+prose_writer:
+  max_tokens_per_scene: 4096
+  auto_append_to_story: true
+
+persona:
+  max_tokens: 2000
+
+paths:
+  lore: ./lore
+  story: ./story
+  code_requests: ./code-requests
