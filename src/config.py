@@ -33,11 +33,16 @@ class LoreConfig(BaseModel):
     active: str | None = None  # Subdirectory name, None = use root lore/
 
 
+class WritingStyleConfig(BaseModel):
+    active: str = "default"  # Filename (without .md) in paths.writing_styles
+
+
 class PathsConfig(BaseModel):
     lore: Path = Path("./lore")
     story: Path = Path("./story")
     code_requests: Path = Path("./code-requests")
     persona: Path = Path("./persona")
+    writing_styles: Path = Path("./writing-styles")
 
 
 class AppConfig(BaseModel):
@@ -47,6 +52,7 @@ class AppConfig(BaseModel):
     prose_writer: ProseWriterConfig = Field(default_factory=ProseWriterConfig)
     persona: PersonaConfig = Field(default_factory=PersonaConfig)
     lore: LoreConfig = Field(default_factory=LoreConfig)
+    writing_style: WritingStyleConfig = Field(default_factory=WritingStyleConfig)
     paths: PathsConfig = Field(default_factory=PathsConfig)
 
     @property
@@ -62,6 +68,11 @@ class AppConfig(BaseModel):
         if self.persona.active:
             return self.paths.persona / self.persona.active
         return self.paths.persona
+
+    @property
+    def active_writing_style_path(self) -> Path:
+        """Resolved path to the active writing style file."""
+        return self.paths.writing_styles / f"{self.writing_style.active}.md"
 
 
 def load_config(
@@ -90,8 +101,8 @@ def load_config(
 
 
 def list_profiles(config: AppConfig) -> dict[str, list[str]]:
-    """Discover available persona and lore profiles."""
-    profiles: dict[str, list[str]] = {"personas": [], "lore_sets": []}
+    """Discover available persona, lore, and writing style profiles."""
+    profiles: dict[str, list[str]] = {"personas": [], "lore_sets": [], "writing_styles": []}
 
     # Scan persona directory for subdirectories containing .md files
     persona_dir = config.paths.persona
@@ -99,7 +110,6 @@ def list_profiles(config: AppConfig) -> dict[str, list[str]]:
         for sub in sorted(persona_dir.iterdir()):
             if sub.is_dir() and any(sub.glob("*.md")):
                 profiles["personas"].append(sub.name)
-        # If root has .md files but no subdirs, there's just the default
         if not profiles["personas"] and any(persona_dir.glob("*.md")):
             profiles["personas"].append("(default)")
 
@@ -109,8 +119,13 @@ def list_profiles(config: AppConfig) -> dict[str, list[str]]:
         for sub in sorted(lore_dir.iterdir()):
             if sub.is_dir() and (any(sub.glob("*.md")) or any(sub.rglob("*.md"))):
                 profiles["lore_sets"].append(sub.name)
-        # If root has .md files directly, there's a default set
         if any(lore_dir.glob("*.md")):
             profiles["lore_sets"].insert(0, "(default)")
+
+    # Scan writing styles directory for .md files
+    styles_dir = config.paths.writing_styles
+    if styles_dir.exists():
+        for f in sorted(styles_dir.glob("*.md")):
+            profiles["writing_styles"].append(f.stem)
 
     return profiles

@@ -102,19 +102,22 @@ async def profiles():
     return {
         "personas": discovered["personas"],
         "lore_sets": discovered["lore_sets"],
+        "writing_styles": discovered["writing_styles"],
         "active_persona": _config.persona.active or "(default)",
         "active_lore": _config.lore.active or "(default)",
+        "active_writing_style": _config.writing_style.active,
     }
 
 
 class ProfileRequest(BaseModel):
     persona: str | None = None
     lore_set: str | None = None
+    writing_style: str | None = None
 
 
 @app.post("/api/profiles/switch")
 async def switch_profile(request: ProfileRequest):
-    """Switch active persona and/or lore set. Reinitializes agents."""
+    """Switch active persona, lore set, and/or writing style. Reinitializes agents."""
     global _orchestrator, _config
 
     if _config is None:
@@ -125,6 +128,8 @@ async def switch_profile(request: ProfileRequest):
         _config.persona.active = None if request.persona == "(default)" else request.persona
     if request.lore_set is not None:
         _config.lore.active = None if request.lore_set == "(default)" else request.lore_set
+    if request.writing_style is not None:
+        _config.writing_style.active = request.writing_style
 
     # Reinitialize agents with new profile
     loop = asyncio.get_event_loop()
@@ -134,6 +139,7 @@ async def switch_profile(request: ProfileRequest):
         "status": "ok",
         "active_persona": _config.persona.active or "(default)",
         "active_lore": _config.lore.active or "(default)",
+        "active_writing_style": _config.writing_style.active,
         "lore_files": len(_orchestrator.librarian.lore) if _orchestrator else 0,
     }
 

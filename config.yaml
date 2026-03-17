@@ -19,8 +19,12 @@ persona:
 lore:
   # active: pale-city       # Subdirectory of paths.lore to use (omit for root)
 
+writing_style:
+  active: default            # Filename (without .md) in paths.writing_styles
+
 paths:
   lore: ./lore
   story: ./story
   code_requests: ./code-requests
   persona: ./persona
+  writing_styles: ./writing-styles

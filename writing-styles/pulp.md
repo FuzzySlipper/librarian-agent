@@ -1,0 +1,1 @@
+Write with momentum. Short punchy sentences for action, longer ones to build tension. Vivid sensory details — what it smells like, what the light does. Dialogue should crackle. Characters think fast and act faster. Don't slow down for introspection during action scenes. Cliffhangers are welcome.

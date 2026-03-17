@@ -1,0 +1,1 @@
+Write in third person, past tense. Focus on scene, dialogue, and character interiority. Show, don't tell. End scenes at natural stopping points, not cliffhangers unless requested. Maintain consistency with established tone and voice.

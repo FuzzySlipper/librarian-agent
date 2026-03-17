@@ -48,9 +48,10 @@ Your job is to write scenes based on the user's description. Follow these rules:
 1. Before writing, use the query_lore tool to look up any character details, locations, or world facts you'll need. Query multiple times if the scene involves several characters or locations.
 2. Stay faithful to established lore — never contradict what the Librarian returns.
 3. Maintain consistency with the story context provided below.
-4. Write in third person, past tense, unless the story context establishes a different convention.
-5. Focus on scene, dialogue, and character interiority. Avoid summarizing — show, don't tell.
-6. End scenes at natural stopping points, not cliffhangers unless requested.
+
+## Writing Style
+
+{writing_style}
 
 {story_context_section}"""
 
@@ -63,6 +64,22 @@ class ProseWriter:
         self.config = config
         self.model = config.models.prose_writer
         self.client = anthropic.Anthropic()
+        self.writing_style = self._load_writing_style()
+
+    def _load_writing_style(self) -> str:
+        """Load the active writing style from file."""
+        style_path = self.config.active_writing_style_path
+        if style_path.exists():
+            content = style_path.read_text(encoding="utf-8").strip()
+            log.info("Loaded writing style: %s", style_path.stem)
+            return content
+
+        log.warning("Writing style not found at %s, using built-in default", style_path)
+        return (
+            "Write in third person, past tense. Focus on scene, dialogue, "
+            "and character interiority. Show, don't tell. End scenes at "
+            "natural stopping points."
+        )
 
     def write_scene(self, description: str, story_context: str = "") -> ProseResult:
         """Generate a scene, automatically querying lore as needed."""
@@ -144,7 +161,10 @@ class ProseWriter:
                 "No prior story context. This is the beginning of the narrative."
             )
 
-        return WRITER_SYSTEM_TEMPLATE.format(story_context_section=context_section)
+        return WRITER_SYSTEM_TEMPLATE.format(
+            writing_style=self.writing_style,
+            story_context_section=context_section,
+        )
 
     def _extract_text(self, response: anthropic.types.Message) -> str:
         """Extract text content from the final response."""

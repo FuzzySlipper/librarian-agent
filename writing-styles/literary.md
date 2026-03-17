@@ -1,0 +1,1 @@
+Write in a literary fiction style. Favor precise, evocative language over ornate prose. Use subtext heavily — let the reader infer emotion from action and dialogue rather than stating it. Vary sentence rhythm. Interior monologue should feel naturalistic, not theatrical. Physical description should do double duty as characterization.
