@@ -136,3 +136,22 @@ The Orchestrator's conversational responses (not just prose output) should be lo
 Project tasks tracked in `TASKS.md`, architectural decisions in `DECISIONS.md` (this file). Both are plain markdown in the repo.
 
 **Why:** MCP task systems add overhead and dependencies for something that's essentially a list in a file. The primary risk is losing architectural context between coding sessions. Markdown files in the repo are readable by any coding assistant, greppable, and versioned by git. Decisions are preserved with rationale so future sessions don't re-litigate settled questions.
+
+---
+
+## ADR-011: Dice rolls and companion state files for plot progression
+
+**Status:** Accepted
+**Date:** 2026-03-17
+
+Non-LLM execution logic (dice rolls) and structured narrative metadata (story state) are handled through dedicated orchestrator tools rather than prompt engineering hacks.
+
+**Dice rolling:** `roll_dice` tool provides pure RNG with standard notation (2d6, 1d20+5, 4d6kh3). The model calls it when randomness should influence events — combat, encounters, plot forks. No LLM involved in the roll itself.
+
+**Story state:** `get_story_state` / `update_story_state` tools read/write a companion `.state.yaml` file alongside the active prose/chat file (e.g. `chapter-03.state.yaml` sits next to `chapter-03.md`). State tracks plot threads, character conditions, relationship levels, tension — anything the model needs to remember across turns but that shouldn't live in prose.
+
+**Why companion files instead of prompt metadata:** Users were injecting tracking metadata into SillyTavern prompts, which (a) clutters the context where it can affect prose quality, (b) breaks prompt caching since the system prompt changes every turn, (c) mixes structured data with unstructured prose. Companion YAML files keep state structured, separate from prose, and outside the cached lore/persona system prompt. The state *summary* is injected into the non-cached portion of the prompt so the model sees it without cache invalidation.
+
+**Event log and pacing:** Every mutation (prose append, state update, dice roll, entry removal) increments a monotonic `_event_counter` and appends to a capped `_events` list (last 50). The counter is surfaced to the model as `_update_count` in the state summary. This gives the LLM a sense of time — it can check "how many updates since the last major plot event" and pace escalation accordingly. The full event history is available via `get_story_state` for more detailed reasoning.
+
+**Why not a database:** Consistent with ADR-001. YAML files in the mounted volume are human-readable, editable, and backed up alongside the prose. No additional dependencies.

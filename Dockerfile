@@ -16,10 +16,11 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY src/ src/
 COPY config.yaml .
 COPY persona/ persona/
+COPY writing-styles/ writing-styles/
 
 # Copy built frontend
 COPY --from=frontend /frontend/dist static/
 
-EXPOSE 8000
+EXPOSE 8005
 
-CMD ["python", "-m", "uvicorn", "src.web.server:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["python", "-m", "uvicorn", "src.web.server:app", "--host", "0.0.0.0", "--port", "8005"]

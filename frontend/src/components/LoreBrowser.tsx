@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import MDEditor from "@uiw/react-md-editor";
 import Overlay from "./Overlay";
 import { listLore, readLore, writeLore, type LoreFileInfo } from "../api";
 
@@ -84,11 +85,15 @@ export default function LoreBrowser({ open, onClose, onChanged }: LoreBrowserPro
             <p className="text-text-muted">Loading...</p>
           ) : (
             <>
-              <textarea
-                value={content}
-                onChange={(e) => setContent(e.target.value)}
-                className="bg-input-bg text-text border border-border rounded-lg px-3 py-2 text-sm font-mono resize-y min-h-[300px] focus:outline-none focus:border-accent"
-              />
+              <div data-color-mode="dark">
+                <MDEditor
+                  value={content}
+                  onChange={(val) => setContent(val ?? "")}
+                  height={400}
+                  preview="edit"
+                  visibleDragbar
+                />
+              </div>
               {isDirty && (
                 <div className="flex gap-2 justify-end">
                   <button

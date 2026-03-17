@@ -142,6 +142,8 @@ The Orchestrator is a **tool-use loop with broad filesystem access** (ADR-003). 
 - Delegates technical queries to a clean agent call without persona overhead (ADR-006)
 - Can read/write/search files within mounted volumes
 - Can write structured code change requests (ADR-004)
+- Dice rolling for randomized outcomes — pure RNG, no LLM overhead (ADR-011)
+- Story state tracking via companion .state.yaml files — structured metadata separate from prose (ADR-011)
 - Logs responses for portability (ADR-009)
 
 **Key constraints:**
@@ -241,7 +243,7 @@ services:
   narrator:
     build: .
     ports:
-      - "8000:8000"
+      - "8005:8005"
     env_file:
       - ~/Documents/narrative-content/.env
     volumes:

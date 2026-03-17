@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { getMode, getStatus, newSession, sendChat } from "./api";
-import type { Message, Mode, Status } from "./types";
+import { getMode, getStatus, newSession, sendChatStream } from "./api";
+import type { Message, MessageVariant, Mode, Status } from "./types";
 import HeaderBar from "./components/HeaderBar";
 import MessageBubble from "./components/MessageBubble";
 import InputBar from "./components/InputBar";
@@ -17,11 +17,15 @@ function App() {
   const [mode, setMode] = useState<Mode>("general");
   const [hasPending, setHasPending] = useState(false);
   const [sending, setSending] = useState(false);
+  const [streamStatus, setStreamStatus] = useState<string | null>(null);
   const [profileOpen, setProfileOpen] = useState(false);
   const [modeOpen, setModeOpen] = useState(false);
   const [contextOpen, setContextOpen] = useState(false);
   const [loreOpen, setLoreOpen] = useState(false);
+  const abortRef = useRef<AbortController | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  // When true, the next response will be added as a variant to the last assistant message
+  const addAsVariantRef = useRef(false);
 
   const refreshStatus = useCallback(() => {
     getStatus()
@@ -41,32 +45,95 @@ function App() {
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages]);
+  }, [messages, streamStatus]);
+
+  function addResponseMessage(content: string, responseType: string, portrait?: string | null) {
+    if (addAsVariantRef.current) {
+      // Add as a variant to the last assistant message
+      addAsVariantRef.current = false;
+      setMessages((prev) => {
+        const lastIdx = [...prev].reverse().findIndex((m) => m.role === "assistant");
+        if (lastIdx === -1) {
+          return [...prev, makeAssistantMsg(content, responseType, portrait)];
+        }
+        const idx = prev.length - 1 - lastIdx;
+        const msg = prev[idx];
+        const variants: MessageVariant[] = msg.variants ?? [
+          { content: msg.content, responseType: msg.responseType, timestamp: msg.timestamp, portrait: msg.portrait },
+        ];
+        const newVariant: MessageVariant = { content, responseType, timestamp: Date.now(), portrait };
+        const newVariants = [...variants, newVariant];
+        const newIdx = newVariants.length - 1;
+
+        return [
+          ...prev.slice(0, idx),
+          {
+            ...msg,
+            content,
+            responseType,
+            portrait,
+            variants: newVariants,
+            activeVariant: newIdx,
+          },
+          ...prev.slice(idx + 1),
+        ];
+      });
+    } else {
+      setMessages((prev) => [...prev, makeAssistantMsg(content, responseType, portrait)]);
+    }
+  }
+
+  function makeAssistantMsg(content: string, responseType: string, portrait?: string | null): Message {
+    return {
+      id: crypto.randomUUID(),
+      role: "assistant",
+      content,
+      responseType,
+      portrait,
+      timestamp: Date.now(),
+    };
+  }
 
   async function doSend(text: string) {
     setSending(true);
+    setStreamStatus("Connecting...");
+    const abort = new AbortController();
+    abortRef.current = abort;
+
     try {
-      const data = await sendChat(text);
-      const assistantMsg: Message = {
-        id: crypto.randomUUID(),
-        role: "assistant",
-        content: data.content,
-        responseType: data.response_type,
-        timestamp: Date.now(),
-      };
-      setMessages((prev) => [...prev, assistantMsg]);
-      refreshStatus();
+      await sendChatStream(
+        text,
+        (event) => {
+          if (event.type === "status") {
+            setStreamStatus(event.data.message as string);
+          } else if (event.type === "tool") {
+            setStreamStatus(`Using ${event.data.name}...`);
+          } else if (event.type === "done") {
+            addResponseMessage(
+              event.data.content as string,
+              event.data.response_type as string,
+              event.data.portrait as string | null | undefined,
+            );
+            setStreamStatus(null);
+            refreshStatus();
+          } else if (event.type === "error") {
+            addResponseMessage(`Error: ${event.data.message}`, "error");
+            setStreamStatus(null);
+          }
+        },
+        abort.signal,
+      );
     } catch (err) {
-      const errorMsg: Message = {
-        id: crypto.randomUUID(),
-        role: "assistant",
-        content: `Error: ${err instanceof Error ? err.message : "Connection failed"}`,
-        responseType: "error",
-        timestamp: Date.now(),
-      };
-      setMessages((prev) => [...prev, errorMsg]);
+      if ((err as Error).name !== "AbortError") {
+        addResponseMessage(
+          `Error: ${err instanceof Error ? err.message : "Connection failed"}`,
+          "error",
+        );
+      }
+      setStreamStatus(null);
     } finally {
       setSending(false);
+      abortRef.current = null;
     }
   }
 
@@ -78,7 +145,12 @@ function App() {
       timestamp: Date.now(),
     };
     setMessages((prev) => [...prev, userMsg]);
+    addAsVariantRef.current = false;
     await doSend(text);
+  }
+
+  function handleStop() {
+    abortRef.current?.abort();
   }
 
   function handleEditMessage(id: string, newContent: string) {
@@ -87,19 +159,36 @@ function App() {
     );
   }
 
-  // Writer mode: send "accept" or "regenerate" as chat commands
+  function handleSwipe(id: string, direction: "prev" | "next") {
+    setMessages((prev) =>
+      prev.map((m) => {
+        if (m.id !== id || !m.variants) return m;
+        const current = m.activeVariant ?? 0;
+        const next = direction === "prev" ? current - 1 : current + 1;
+        if (next < 0 || next >= m.variants.length) return m;
+        const variant = m.variants[next];
+        return {
+          ...m,
+          content: variant.content,
+          responseType: variant.responseType,
+          portrait: variant.portrait,
+          activeVariant: next,
+        };
+      }),
+    );
+  }
+
   async function handleAccept() {
     await doSend("accept");
   }
 
   async function handleRegenerate() {
+    addAsVariantRef.current = true;
     await doSend("regenerate");
   }
 
-  // Roleplay mode
   async function handleDeleteLast() {
     await doSend("delete");
-    // Remove the last assistant message from local state too
     setMessages((prev) => {
       const lastAssistantIdx = [...prev].reverse().findIndex((m) => m.role === "assistant");
       if (lastAssistantIdx === -1) return prev;
@@ -143,12 +232,21 @@ function App() {
           <MessageBubble
             key={msg.id}
             message={msg}
+            mode={mode}
             onEdit={msg.role === "user" ? handleEditMessage : undefined}
+            onSwipe={msg.role === "assistant" ? handleSwipe : undefined}
           />
         ))}
-        {sending && (
-          <div className="text-text-muted italic text-sm px-4 py-2">
-            thinking...
+        {sending && streamStatus && (
+          <div className="flex items-center gap-2 text-text-muted italic text-sm px-4 py-2">
+            <span className="inline-block w-2 h-2 rounded-full bg-accent animate-pulse" />
+            <span>{streamStatus}</span>
+            <button
+              onClick={handleStop}
+              className="ml-auto text-xs bg-surface-alt hover:bg-border text-text-muted hover:text-text rounded px-2 py-1 transition-colors"
+            >
+              Stop
+            </button>
           </div>
         )}
         <div ref={messagesEndRef} />

@@ -14,11 +14,14 @@ and state management, but shares the same tool-use loop.
 
 import json
 import logging
+import random
+import re
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
 
 import anthropic
+import yaml
 
 from src.agents.librarian import Librarian
 from src.agents.prose_writer import ProseWriter, _load_story_context
@@ -173,6 +176,73 @@ ORCHESTRATOR_TOOLS = [
             "required": ["query"],
         },
     },
+    {
+        "name": "roll_dice",
+        "description": (
+            "Roll dice using standard notation (e.g. '2d6', '1d20+5', '3d8-2'). "
+            "Use for combat, random events, plot progression, chance encounters, "
+            "or any time randomness should influence the narrative. Returns individual "
+            "rolls and total. No LLM involved — pure RNG."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "notation": {
+                    "type": "string",
+                    "description": "Dice notation, e.g. '2d6', '1d20+5', '4d6kh3' (keep highest 3).",
+                },
+                "reason": {
+                    "type": "string",
+                    "description": "What this roll is for — helps the model interpret the result in context.",
+                },
+            },
+            "required": ["notation"],
+        },
+    },
+    {
+        "name": "get_story_state",
+        "description": (
+            "Read the current story/session state — plot threads, character conditions, "
+            "relationship trackers, tension levels, etc. Also includes the event log: "
+            "a chronological record of all updates with a monotonic counter (_event_counter) "
+            "and recent event history (_events). Use the counter for pacing logic — e.g. "
+            "'major plot events should be at least 20 updates apart'. State is stored in a "
+            "companion .state.yaml file alongside the active story/chat file, separate from prose."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {},
+        },
+    },
+    {
+        "name": "update_story_state",
+        "description": (
+            "Update the story/session state. Use this to track plot progression, "
+            "character status changes, relationship shifts, tension levels, quest "
+            "progress, or any narrative metadata. Each update increments the event "
+            "counter and adds to the event log. State persists across turns in a "
+            "companion .state.yaml file — never injected into the main prompt."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "updates": {
+                    "type": "object",
+                    "description": (
+                        "Key-value pairs to merge into the state. Nested objects are "
+                        "supported. Example: {\"characters\": {\"elena\": {\"mood\": \"suspicious\"}}, "
+                        "\"tension\": 7}"
+                    ),
+                },
+                "remove_keys": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Top-level keys to remove from state, if any.",
+                },
+            },
+            "required": ["updates"],
+        },
+    },
 ]
 
 # ── Mode-specific system prompt sections ──────────────────────────────
@@ -184,7 +254,9 @@ You are in general conversation mode. Route requests naturally:
 - Use query_lore for world/character questions
 - Use delegate_technical for technical/factual questions unrelated to the story
 - Use filesystem tools to help manage content
-- Discuss story planning, give feedback, or brainstorm freely"""
+- Discuss story planning, give feedback, or brainstorm freely
+- Use roll_dice when randomness should affect outcomes
+- Use get_story_state / update_story_state to track ongoing plot threads and character status"""
 
 WRITER_MODE_PROMPT = """## Mode: Writer
 
@@ -225,6 +297,16 @@ Special commands the user might say:
 - "undo" → Same as delete
 
 Otherwise, every exchange appends to the file naturally, building the ongoing narrative.
+
+Use roll_dice for combat outcomes, random encounters, or any time chance should shape the story.
+Use update_story_state to track relationship changes, plot progression, character injuries, mood shifts,
+or anything that should persist and inform future responses. Check state with get_story_state.
+The state file is separate from the prose — it won't clutter the narrative.
+
+The state file includes an event counter (_update_count in the story state summary above).
+Use this for pacing: check get_story_state to see how many updates have passed since major events,
+and pace plot progression accordingly. For example, if a plot thread is marked as "building" and
+30+ updates have passed, it may be time to escalate.
 
 {file_context}"""
 
@@ -409,10 +491,18 @@ class Orchestrator:
                 file_context=file_context,
             ))
 
+        # Inject story state if it exists (outside the cached system prompt)
+        state_content = self._load_state_summary()
+        if state_content:
+            parts.append(f"\n## Story State\n\n{state_content}")
+
         parts.append(
             "\n## Tools\n\n"
             "Use tools proactively. Don't ask the user to do things you can do yourself.\n"
-            "For technical/factual questions unrelated to the story, use delegate_technical."
+            "For technical/factual questions unrelated to the story, use delegate_technical.\n"
+            "Use roll_dice when randomness should influence events (combat, chance encounters, etc.).\n"
+            "Use get_story_state / update_story_state to track plot threads, character conditions, "
+            "and narrative metadata — this persists across turns without cluttering the prose."
         )
 
         return "\n\n".join(parts)
@@ -481,6 +571,92 @@ class Orchestrator:
             content=response_text,
             response_type=response_type,
         )
+
+    def handle_stream(self, user_input: str):
+        """Process user input, yielding progress events as dicts.
+
+        Yields dicts with 'event' key:
+          - {"event": "status", "message": "..."}     — progress update
+          - {"event": "tool", "name": "...", "input": {...}}  — tool being called
+          - {"event": "done", "content": "...", "response_type": "..."}  — final result
+        """
+        # Handle mode-specific commands before the LLM
+        intercepted = self._handle_mode_commands(user_input)
+        if intercepted:
+            yield {"event": "done", "content": intercepted.content, "response_type": intercepted.response_type}
+            return
+
+        yield {"event": "status", "message": "Building prompt..."}
+
+        system_prompt = self._build_system_prompt()
+        self.conversation_history.append({"role": "user", "content": user_input})
+        messages = list(self.conversation_history)
+
+        response_text = ""
+        response_type = "discussion"
+        loop_count = 0
+
+        while True:
+            loop_count += 1
+            yield {"event": "status", "message": f"Thinking... (step {loop_count})"}
+
+            response = self.client.messages.create(
+                model=self.model,
+                max_tokens=4096,
+                system=system_prompt,
+                messages=messages,
+                tools=ORCHESTRATOR_TOOLS,
+            )
+
+            if response.stop_reason == "end_turn":
+                response_text = self._extract_text(response)
+                break
+
+            if response.stop_reason == "tool_use":
+                messages.append({"role": "assistant", "content": response.content})
+                tool_results = []
+
+                for block in response.content:
+                    if block.type == "tool_use":
+                        yield {"event": "tool", "name": block.name, "input": block.input}
+
+                        # Friendly status messages
+                        tool_labels = {
+                            "query_lore": "Querying lore...",
+                            "write_prose": "Writing prose...",
+                            "read_file": f"Reading {block.input.get('path', 'file')}...",
+                            "write_file": f"Writing {block.input.get('path', 'file')}...",
+                            "list_files": "Listing files...",
+                            "search_files": "Searching files...",
+                            "request_code_change": "Creating code request...",
+                            "delegate_technical": "Looking that up...",
+                            "roll_dice": f"Rolling {block.input.get('notation', 'dice')}...",
+                            "get_story_state": "Checking story state...",
+                            "update_story_state": "Updating story state...",
+                        }
+                        yield {"event": "status", "message": tool_labels.get(block.name, f"Using {block.name}...")}
+
+                        result, rtype = self._execute_tool(block.name, block.input)
+                        if rtype:
+                            response_type = rtype
+                        tool_results.append({
+                            "type": "tool_result",
+                            "tool_use_id": block.id,
+                            "content": result,
+                        })
+
+                messages.append({"role": "user", "content": tool_results})
+                continue
+
+            log.warning("Unexpected stop_reason: %s", response.stop_reason)
+            response_text = self._extract_text(response)
+            break
+
+        response_text, response_type = self._post_generation(response_text, response_type, user_input)
+        self.conversation_history.append({"role": "assistant", "content": response_text})
+        self._log_response(user_input, response_text, response_type)
+
+        yield {"event": "done", "content": response_text, "response_type": response_type}
 
     # ── Mode-specific command interception ────────────────────────────
 
@@ -577,6 +753,7 @@ class Orchestrator:
             f.write(content)
 
         log.info("Appended %d chars to %s", len(content), path)
+        self._record_event("prose_appended", {"chars": len(content)})
 
     def _remove_last_entry(self) -> None:
         """Remove the last entry (double-newline-separated block) from the active file."""
@@ -598,6 +775,7 @@ class Orchestrator:
 
         path.write_text(new_content, encoding="utf-8")
         log.info("Removed last entry from %s", path)
+        self._record_event("entry_removed")
 
     # ── Tool execution ────────────────────────────────────────────────
 
@@ -655,6 +833,15 @@ class Orchestrator:
 
         elif name == "delegate_technical":
             return self._tool_delegate_technical(input_data), "discussion"
+
+        elif name == "roll_dice":
+            return self._tool_roll_dice(input_data), None
+
+        elif name == "get_story_state":
+            return self._tool_get_story_state(), None
+
+        elif name == "update_story_state":
+            return self._tool_update_story_state(input_data), None
 
         else:
             return json.dumps({"error": f"Unknown tool: {name}"}), None
@@ -794,6 +981,151 @@ class Orchestrator:
         )
         return response.content[0].text
 
+    # ── Dice and state tools ─────────────────────────────────────────
+
+    def _tool_roll_dice(self, input_data: dict) -> str:
+        """Parse dice notation and return results. Pure RNG, no LLM."""
+        notation = input_data["notation"].strip().lower()
+        reason = input_data.get("reason", "")
+
+        try:
+            result = _parse_and_roll(notation)
+        except ValueError as e:
+            return json.dumps({"error": str(e)})
+
+        result["reason"] = reason
+        log.info("Dice roll: %s = %d (%s)", notation, result["total"], reason)
+        self._record_event("dice_roll", {"notation": notation, "total": result["total"], "reason": reason})
+        return json.dumps(result)
+
+    def _record_event(self, event_type: str, details: dict | None = None) -> None:
+        """Record an event in the state file's event log.
+
+        Maintains:
+          _event_counter: monotonic int, incremented on every event
+          _events: list of recent events (capped at 50), each with counter, timestamp, type, details
+        """
+        path = self._state_file_path()
+        if path is None:
+            return
+
+        try:
+            state: dict = {}
+            if path.exists():
+                existing = yaml.safe_load(path.read_text(encoding="utf-8"))
+                if isinstance(existing, dict):
+                    state = existing
+
+            counter = state.get("_event_counter", 0) + 1
+            state["_event_counter"] = counter
+            state["_last_updated"] = datetime.now().isoformat()
+
+            event_entry = {
+                "n": counter,
+                "t": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "type": event_type,
+            }
+            if details:
+                event_entry["details"] = details
+
+            events = state.get("_events", [])
+            events.append(event_entry)
+            # Keep only the last 50 events to avoid unbounded growth
+            state["_events"] = events[-50:]
+
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(
+                yaml.dump(state, default_flow_style=False, allow_unicode=True),
+                encoding="utf-8",
+            )
+        except Exception as e:
+            log.warning("Failed to record event: %s", e)
+
+    def _load_state_summary(self) -> str:
+        """Load the state file contents as a YAML string for prompt injection."""
+        path = self._state_file_path()
+        if path is None or not path.exists():
+            return ""
+        try:
+            content = path.read_text(encoding="utf-8")
+            # Skip if empty or just metadata
+            state = yaml.safe_load(content)
+            if not state or (len(state) == 1 and "_last_updated" in state):
+                return ""
+            # Expose the event counter but not the full event log
+            display = {k: v for k, v in state.items() if not k.startswith("_")}
+            counter = state.get("_event_counter", 0)
+            if counter:
+                display["_update_count"] = counter
+            return yaml.dump(display, default_flow_style=False, allow_unicode=True).strip()
+        except Exception:
+            return ""
+
+    def _state_file_path(self) -> Path | None:
+        """Get the companion .state.yaml path for the active file."""
+        active = self._active_file_path()
+        if active is None:
+            # No active file — use a session-level state file
+            if self.mode == Mode.WRITER:
+                base = self.config.paths.writing
+            elif self.mode == Mode.ROLEPLAY:
+                base = self.config.paths.chats
+            else:
+                base = self.config.paths.story
+
+            project = self.active_project or "_general"
+            return base / project / "_session.state.yaml"
+
+        # Companion file: chapter-03.md → chapter-03.state.yaml
+        return active.with_suffix(".state.yaml")
+
+    def _tool_get_story_state(self) -> str:
+        """Read the companion state file."""
+        path = self._state_file_path()
+        if path is None or not path.exists():
+            return json.dumps({"state": {}, "note": "No state file yet. Use update_story_state to create one."})
+
+        try:
+            content = path.read_text(encoding="utf-8")
+            state = yaml.safe_load(content) or {}
+            return json.dumps({"state": state, "path": str(path.name)})
+        except Exception as e:
+            return json.dumps({"error": f"Failed to read state: {e}"})
+
+    def _tool_update_story_state(self, input_data: dict) -> str:
+        """Merge updates into the companion state file."""
+        path = self._state_file_path()
+        if path is None:
+            return json.dumps({"error": "No active context for state tracking."})
+
+        try:
+            # Load existing state
+            state: dict = {}
+            if path.exists():
+                existing = yaml.safe_load(path.read_text(encoding="utf-8"))
+                if isinstance(existing, dict):
+                    state = existing
+
+            # Remove keys if requested
+            for key in input_data.get("remove_keys", []):
+                state.pop(key, None)
+
+            # Deep merge updates
+            _deep_merge(state, input_data.get("updates", {}))
+
+            # Add metadata
+            state["_last_updated"] = datetime.now().isoformat()
+
+            # Write back
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(yaml.dump(state, default_flow_style=False, allow_unicode=True), encoding="utf-8")
+
+            log.info("Story state updated: %s", path.name)
+            self._record_event("state_updated", {"keys": list(input_data.get("updates", {}).keys())})
+            return json.dumps({"status": "ok", "state": state, "path": str(path.name)})
+        except Exception as e:
+            return json.dumps({"error": f"Failed to update state: {e}"})
+
     # ── Utilities ─────────────────────────────────────────────────────
 
     def _extract_text(self, response: anthropic.types.Message) -> str:
@@ -819,3 +1151,68 @@ class Orchestrator:
 
         with open(log_file, "a", encoding="utf-8") as f:
             f.write(entry)
+
+
+# ── Module-level helpers ─────────────────────────────────────────────
+
+def _parse_and_roll(notation: str) -> dict:
+    """Parse dice notation like '2d6', '1d20+5', '4d6kh3' and return results.
+
+    Supports:
+      - NdS: roll N dice with S sides
+      - +/-M: add/subtract modifier
+      - kh/klN: keep highest/lowest N dice
+    """
+    m = re.match(
+        r"(\d+)d(\d+)"           # NdS
+        r"(?:(kh|kl)(\d+))?"     # optional keep highest/lowest
+        r"([+-]\d+)?$",          # optional modifier
+        notation.strip(),
+    )
+    if not m:
+        raise ValueError(f"Invalid dice notation: {notation}. Use format like '2d6', '1d20+5', '4d6kh3'.")
+
+    count = int(m.group(1))
+    sides = int(m.group(2))
+    keep_mode = m.group(3)       # 'kh' or 'kl' or None
+    keep_count = int(m.group(4)) if m.group(4) else None
+    modifier = int(m.group(5)) if m.group(5) else 0
+
+    if count < 1 or count > 100:
+        raise ValueError("Dice count must be 1-100.")
+    if sides < 2 or sides > 1000:
+        raise ValueError("Dice sides must be 2-1000.")
+
+    rolls = [random.randint(1, sides) for _ in range(count)]
+
+    kept = rolls
+    dropped: list[int] = []
+    if keep_mode and keep_count:
+        sorted_rolls = sorted(rolls, reverse=(keep_mode == "kh"))
+        kept = sorted_rolls[:keep_count]
+        dropped = sorted_rolls[keep_count:]
+
+    total = sum(kept) + modifier
+
+    result: dict = {
+        "notation": notation,
+        "rolls": rolls,
+        "total": total,
+    }
+    if keep_mode:
+        result["kept"] = kept
+        result["dropped"] = dropped
+    if modifier:
+        result["modifier"] = modifier
+        result["subtotal"] = sum(kept)
+
+    return result
+
+
+def _deep_merge(base: dict, updates: dict) -> None:
+    """Recursively merge updates into base dict, mutating base."""
+    for key, value in updates.items():
+        if key in base and isinstance(base[key], dict) and isinstance(value, dict):
+            _deep_merge(base[key], value)
+        else:
+            base[key] = value

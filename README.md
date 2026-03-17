@@ -102,7 +102,7 @@ Now you talk to the Orchestrator directly. It decides whether to write a scene, 
 docker-compose up
 ```
 
-Access from any device on your local network. On iPad: open Safari, navigate to your machine's IP on port 8000, add to Home Screen.
+Access from any device on your local network. On iPad: open Safari, navigate to your machine's IP on port 8005, add to Home Screen.
 
 ## Configuration
 

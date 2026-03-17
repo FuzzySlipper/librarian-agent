@@ -45,6 +45,7 @@ class PathsConfig(BaseModel):
     code_requests: Path = Path("./code-requests")
     persona: Path = Path("./persona")
     writing_styles: Path = Path("./writing-styles")
+    portraits: Path = Path("./portraits")
 
 
 class AppConfig(BaseModel):

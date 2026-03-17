@@ -41,7 +41,7 @@ Active work items grouped by development stage. Mark done with `[x]` but keep en
 ## Stage 4 — Orchestrator (CLI)
 
 - [x] Implement `Orchestrator` class with tool-use loop and routing
-  - 8 tools: query_lore, write_prose, read_file, write_file, list_files, search_files, request_code_change, delegate_technical
+  - 11 tools: query_lore, write_prose, read_file, write_file, list_files, search_files, request_code_change, delegate_technical, roll_dice, get_story_state, update_story_state
   - Intent routing handled by the model via tool selection (no manual classifier needed)
 - [x] Three operating modes:
   - **General**: free-form routing (orchestrator decides intent)
@@ -60,6 +60,13 @@ Active work items grouped by development stage. Mark done with `[x]` but keep en
   - Path resolution with escape prevention (can't traverse outside content dirs)
   - Covers lore, story, writing, chats, code-requests directories
 - [x] Code request tool — writes structured markdown with frontmatter to code-requests/ (ADR-004)
+- [x] Dice rolling tool — pure RNG, standard notation (2d6, 1d20+5, 4d6kh3), no LLM overhead (ADR-011)
+- [x] Story state tracking — companion .state.yaml files alongside prose, deep merge updates (ADR-011)
+  - State injected into system prompt (outside cached lore) so model sees current plot threads/conditions
+  - Structured YAML keeps metadata out of prose files and away from prompt caching
+  - Event log with monotonic counter — every prose append, state update, dice roll, and entry removal is indexed
+  - Counter exposed as `_update_count` in prompt; full event history available via get_story_state
+  - Enables pacing logic: "don't escalate plot thread X until 20+ updates have passed"
 - [x] Response logging to story/logs/ directory (ADR-009)
 - [x] Conversation history maintained in memory across turns
 - [x] CLI entry point: `python -m src.main`
@@ -96,15 +103,22 @@ Active work items grouped by development stage. Mark done with `[x]` but keep en
 - [x] Writer mode UI: accept/regenerate buttons shown when prose is pending review
 - [x] Roleplay mode UI: regenerate and delete-last buttons
 - [x] Message editing: click user messages to edit (Ctrl+Enter to save, Esc to cancel)
-- [x] Lore file browser: overlay with grouped file list, token counts, inline editor with save/discard
+- [x] Lore file browser: overlay with grouped file list, token counts, markdown editor (@uiw/react-md-editor) with save/discard
   - Backend: GET/PUT /api/lore endpoints with path traversal prevention
   - Saves trigger Librarian reinitialization to pick up changes
 - [x] Session management: "+" button in header clears conversation, POST /api/session/new endpoint
 - [x] Prose pending indicator: ring highlight on pending-review messages
-- [ ] Swipe between alternatives (regenerate variants)
-- [ ] Streaming text display with stop button
-  - Requires backend SSE endpoint for progress updates during tool-use loops
-  - Design SSE contract alongside frontend build
+- [x] Swipe between alternatives: regenerate adds variant to same message slot, arrow navigation
+- [x] Streaming progress: SSE endpoint (POST /api/chat/stream) with status/tool/done events
+  - Backend: handle_stream() generator yields progress events through tool-use loop
+  - Frontend: live status indicator ("Querying lore...", "Writing prose...") with stop button
+  - Replaces old synchronous POST /api/chat (kept as fallback)
+- [x] Roleplay portraits: IM-style layout with avatar next to assistant messages
+  - portraits/ directory mounted read-only, served as static files
+  - Current portrait tracked in state file (`portrait` key), switchable per-response by the model
+  - Model can update via update_story_state({portrait: "elena-angry.png"}) mid-conversation
+  - Portrait preserved per variant in swipe history
+  - GET /api/portraits lists available images and current selection
 - [ ] SillyTavern reference code at reference/SillyTavern/ (gitignored)
 
 ## Tooling & Support

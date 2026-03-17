@@ -5,13 +5,15 @@ Sync SDK calls run in a thread pool to avoid blocking the event loop (ADR-008).
 """
 
 import asyncio
+import json
 import logging
 from contextlib import asynccontextmanager
 from functools import partial
 from pathlib import Path
+from queue import Queue, Empty
 
 from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -40,6 +42,12 @@ async def lifespan(app: FastAPI):
     writer = ProseWriter(librarian, _config)
     _orchestrator = Orchestrator(librarian, writer, _config)
 
+    # Mount portraits directory for serving images
+    portraits_dir = Path(_config.paths.portraits)
+    if portraits_dir.is_dir():
+        app.mount("/portraits", StaticFiles(directory=str(portraits_dir)), name="portraits")
+        log.info("Portraits directory mounted: %s", portraits_dir)
+
     log.info("Agents initialized, server ready")
     yield
     log.info("Server shutting down")
@@ -56,6 +64,24 @@ if _has_static:
         app.mount("/assets", StaticFiles(directory=str(_assets_dir)), name="static-assets")
 
 
+def _get_current_portrait() -> str | None:
+    """Read the current portrait from the orchestrator's state file."""
+    if _orchestrator is None:
+        return None
+    path = _orchestrator._state_file_path()
+    if path is None or not path.exists():
+        return None
+    try:
+        import yaml
+        state = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        portrait = state.get("portrait")
+        if portrait:
+            return f"/portraits/{portrait}"
+    except Exception:
+        pass
+    return None
+
+
 class ChatRequest(BaseModel):
     message: str
 
@@ -63,6 +89,7 @@ class ChatRequest(BaseModel):
 class ChatResponse(BaseModel):
     content: str
     response_type: str
+    portrait: str | None = None
 
 
 @app.post("/api/chat", response_model=ChatResponse)
@@ -81,6 +108,62 @@ async def chat(request: ChatRequest) -> ChatResponse:
     return ChatResponse(
         content=response.content,
         response_type=response.response_type,
+        portrait=_get_current_portrait(),
+    )
+
+
+@app.post("/api/chat/stream")
+async def chat_stream(request: ChatRequest):
+    """SSE endpoint for streaming chat progress events.
+
+    Events:
+      - event: status, data: {"message": "..."}
+      - event: tool,   data: {"name": "...", "input": {...}}
+      - event: done,   data: {"content": "...", "response_type": "..."}
+    """
+    if _orchestrator is None:
+        return JSONResponse(status_code=503, content={"error": "System not initialized"})
+
+    queue: Queue = Queue()
+
+    def _run_stream():
+        """Run the streaming handler in a thread, pushing events to the queue."""
+        try:
+            for event in _orchestrator.handle_stream(request.message):
+                queue.put(event)
+        except Exception as e:
+            queue.put({"event": "error", "message": str(e)})
+        finally:
+            queue.put(None)  # Sentinel
+
+    loop = asyncio.get_event_loop()
+    loop.run_in_executor(None, _run_stream)
+
+    async def event_generator():
+        while True:
+            try:
+                event = await loop.run_in_executor(None, partial(queue.get, timeout=60))
+            except Empty:
+                yield "event: ping\ndata: {}\n\n"
+                continue
+
+            if event is None:
+                break
+
+            event_type = event.pop("event", "status")
+            # Attach current portrait to done events
+            if event_type == "done":
+                event["portrait"] = _get_current_portrait()
+            yield f"event: {event_type}\ndata: {json.dumps(event)}\n\n"
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
     )
 
 
@@ -226,6 +309,31 @@ async def new_session():
     _orchestrator.last_prompt = None
 
     return {"status": "ok", "message": "Session cleared"}
+
+
+@app.get("/api/portraits")
+async def list_portraits():
+    """List available portrait images."""
+    if _config is None:
+        return JSONResponse(status_code=503, content={"error": "System not initialized"})
+
+    portraits_dir = Path(_config.paths.portraits)
+    if not portraits_dir.exists():
+        return {"portraits": [], "current": None}
+
+    image_exts = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg"}
+    portraits = []
+    for p in sorted(portraits_dir.iterdir()):
+        if p.is_file() and p.suffix.lower() in image_exts:
+            portraits.append({
+                "filename": p.name,
+                "url": f"/portraits/{p.name}",
+            })
+
+    return {
+        "portraits": portraits,
+        "current": _get_current_portrait(),
+    }
 
 
 @app.get("/api/lore")

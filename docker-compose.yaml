@@ -2,7 +2,7 @@ services:
   narrator:
     build: .
     ports:
-      - "8000:8000"
+      - "8005:8005"
     env_file:
       - ${CONTENT_DIR:-.}/.env
     volumes:
@@ -11,6 +11,9 @@ services:
       - ${CONTENT_DIR:-.}/writing/:/app/writing
       - ${CONTENT_DIR:-.}/chats/:/app/chats
       - ${CONTENT_DIR:-.}/code-requests/:/app/code-requests
+      - ${CONTENT_DIR:-.}/persona/:/app/persona:ro
+      - ${CONTENT_DIR:-.}/writing-styles/:/app/writing-styles:ro
+      - ${CONTENT_DIR:-.}/portraits/:/app/portraits:ro
     environment:
       - CONFIG_PATH=/app/config.yaml
     restart: unless-stopped

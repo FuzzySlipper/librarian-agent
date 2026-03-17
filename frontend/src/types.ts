@@ -1,11 +1,24 @@
 export type Mode = "general" | "writer" | "roleplay";
 
+export interface MessageVariant {
+  content: string;
+  responseType?: string;
+  timestamp: number;
+  portrait?: string | null;
+}
+
 export interface Message {
   id: string;
   role: "user" | "assistant";
   content: string;
   responseType?: string;
   timestamp: number;
+  /** Portrait URL for this message (roleplay mode). */
+  portrait?: string | null;
+  /** Alternative responses (for swipe). Index 0 is the original. */
+  variants?: MessageVariant[];
+  /** Currently displayed variant index (0-based). */
+  activeVariant?: number;
 }
 
 export interface Status {

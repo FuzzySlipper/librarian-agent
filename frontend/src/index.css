@@ -11,3 +11,30 @@
   --color-input-bg: #222244;
   --color-border: #333355;
 }
+
+/* MD editor theme overrides */
+.w-md-editor {
+  --color-fg-default: #e0e0e0 !important;
+  --color-canvas-default: #222244 !important;
+  --color-canvas-subtle: #1a1a2e !important;
+  --color-border-default: #333355 !important;
+  --color-border-muted: #333355 !important;
+  border-color: #333355 !important;
+  border-radius: 0.5rem !important;
+}
+
+.w-md-editor-toolbar {
+  background-color: #1a1a2e !important;
+  border-bottom-color: #333355 !important;
+}
+
+.w-md-editor-text-pre,
+.w-md-editor-text-input,
+.w-md-editor-text {
+  font-size: 14px !important;
+}
+
+.wmde-markdown {
+  background-color: #222244 !important;
+  color: #e0e0e0 !important;
+}
