@@ -40,6 +40,8 @@ class WritingStyleConfig(BaseModel):
 class PathsConfig(BaseModel):
     lore: Path = Path("./lore")
     story: Path = Path("./story")
+    writing: Path = Path("./writing")
+    chats: Path = Path("./chats")
     code_requests: Path = Path("./code-requests")
     persona: Path = Path("./persona")
     writing_styles: Path = Path("./writing-styles")

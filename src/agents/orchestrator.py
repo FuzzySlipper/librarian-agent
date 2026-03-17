@@ -1,18 +1,21 @@
 """Orchestrator agent — the user's conversational partner and router.
 
-The Orchestrator is the only agent the user talks to directly. It classifies
-intent, routes to the Librarian or Prose Writer as needed, manages persona,
-and provides filesystem tools for content management within mounted volumes.
+The Orchestrator operates in three modes:
 
-For technical queries, it delegates to a clean agent call without persona
-overhead (ADR-006). For code changes, it writes structured requests to the
-code-requests directory (ADR-004).
+- **General**: Free-form conversation, routes to Librarian/Writer as needed.
+- **Writer**: Long-form writing with project files. Prose is shown to the user
+  for accept/reject/regenerate before being written to the project file.
+- **Roleplay**: Chat-style back-and-forth. Responses auto-append to the chat
+  file. User can regenerate (replace last entry) or delete it.
+
+Mode switching happens via the API. Each mode adjusts the system prompt
+and state management, but shares the same tool-use loop.
 """
 
 import json
 import logging
-import os
 from datetime import datetime
+from enum import Enum
 from pathlib import Path
 
 import anthropic
@@ -25,7 +28,15 @@ from src.utils.file_utils import estimate_tokens
 
 log = logging.getLogger(__name__)
 
-# Tools available to the Orchestrator within mounted volumes
+
+class Mode(str, Enum):
+    GENERAL = "general"
+    WRITER = "writer"
+    ROLEPLAY = "roleplay"
+
+
+# ── Tool definitions ──────────────────────────────────────────────────
+
 ORCHESTRATOR_TOOLS = [
     {
         "name": "query_lore",
@@ -42,21 +53,21 @@ ORCHESTRATOR_TOOLS = [
         },
     },
     {
-        "name": "write_scene",
+        "name": "write_prose",
         "description": (
-            "Generate a prose scene using the Prose Writer. The Writer will "
-            "automatically query lore as needed. The scene is appended to the story file."
+            "Generate prose using the Prose Writer. The Writer will "
+            "automatically query lore as needed. Returns the generated text."
         ),
         "input_schema": {
             "type": "object",
             "properties": {
                 "description": {
                     "type": "string",
-                    "description": "What should happen in the scene.",
+                    "description": "What should be written — scene description, continuation prompt, etc.",
                 },
                 "tone_notes": {
                     "type": "string",
-                    "description": "Optional tone/style guidance for this scene.",
+                    "description": "Optional tone/style guidance for this piece.",
                 },
             },
             "required": ["description"],
@@ -64,14 +75,14 @@ ORCHESTRATOR_TOOLS = [
     },
     {
         "name": "read_file",
-        "description": "Read the contents of a file within the content directories (lore, story, code-requests).",
+        "description": "Read the contents of a file within the content directories.",
         "input_schema": {
             "type": "object",
             "properties": {
                 "path": {"type": "string", "description": "Relative path within the content directory."},
                 "directory": {
                     "type": "string",
-                    "enum": ["lore", "story", "code-requests"],
+                    "enum": ["lore", "story", "writing", "chats", "code-requests"],
                     "description": "Which content directory to read from.",
                 },
             },
@@ -80,14 +91,14 @@ ORCHESTRATOR_TOOLS = [
     },
     {
         "name": "write_file",
-        "description": "Write or update a file within the content directories (lore, story, code-requests).",
+        "description": "Write or update a file within the content directories.",
         "input_schema": {
             "type": "object",
             "properties": {
                 "path": {"type": "string", "description": "Relative path within the content directory."},
                 "directory": {
                     "type": "string",
-                    "enum": ["lore", "story", "code-requests"],
+                    "enum": ["lore", "story", "writing", "chats", "code-requests"],
                     "description": "Which content directory to write to.",
                 },
                 "content": {"type": "string", "description": "File content to write."},
@@ -103,7 +114,7 @@ ORCHESTRATOR_TOOLS = [
             "properties": {
                 "directory": {
                     "type": "string",
-                    "enum": ["lore", "story", "code-requests"],
+                    "enum": ["lore", "story", "writing", "chats", "code-requests"],
                     "description": "Which content directory to list.",
                 },
                 "subdirectory": {
@@ -116,14 +127,14 @@ ORCHESTRATOR_TOOLS = [
     },
     {
         "name": "search_files",
-        "description": "Search for text within files in a content directory. Returns matching lines with file paths.",
+        "description": "Search for text within files in a content directory.",
         "input_schema": {
             "type": "object",
             "properties": {
                 "query": {"type": "string", "description": "Text to search for (case-insensitive)."},
                 "directory": {
                     "type": "string",
-                    "enum": ["lore", "story", "code-requests"],
+                    "enum": ["lore", "story", "writing", "chats", "code-requests"],
                     "description": "Which content directory to search.",
                 },
             },
@@ -133,29 +144,16 @@ ORCHESTRATOR_TOOLS = [
     {
         "name": "request_code_change",
         "description": (
-            "Write a formal code change request for the development team. "
-            "Use this when the user describes a problem or feature that requires "
-            "changes to the system's code rather than its content."
+            "Write a formal code change request for the development team."
         ),
         "input_schema": {
             "type": "object",
             "properties": {
-                "title": {"type": "string", "description": "Short title for the change request."},
-                "problem": {"type": "string", "description": "What problem or need this addresses."},
-                "suggested_approach": {
-                    "type": "string",
-                    "description": "How the change might be implemented.",
-                },
-                "priority": {
-                    "type": "string",
-                    "enum": ["low", "medium", "high"],
-                    "description": "Priority level.",
-                },
-                "affected_files": {
-                    "type": "array",
-                    "items": {"type": "string"},
-                    "description": "List of likely affected source files.",
-                },
+                "title": {"type": "string"},
+                "problem": {"type": "string"},
+                "suggested_approach": {"type": "string"},
+                "priority": {"type": "string", "enum": ["low", "medium", "high"]},
+                "affected_files": {"type": "array", "items": {"type": "string"}},
             },
             "required": ["title", "problem"],
         },
@@ -164,19 +162,71 @@ ORCHESTRATOR_TOOLS = [
         "name": "delegate_technical",
         "description": (
             "Route a factual or technical question to a focused agent without "
-            "personality context, for higher accuracy. Use this for questions about "
-            "technology, code, troubleshooting, or factual queries unrelated to the story."
+            "personality context, for higher accuracy."
         ),
         "input_schema": {
             "type": "object",
             "properties": {
-                "query": {"type": "string", "description": "The technical question to answer."},
-                "reason": {"type": "string", "description": "Why this should be delegated."},
+                "query": {"type": "string"},
+                "reason": {"type": "string"},
             },
             "required": ["query"],
         },
     },
 ]
+
+# ── Mode-specific system prompt sections ──────────────────────────────
+
+GENERAL_MODE_PROMPT = """## Mode: General
+
+You are in general conversation mode. Route requests naturally:
+- Use write_prose for any creative writing requests
+- Use query_lore for world/character questions
+- Use delegate_technical for technical/factual questions unrelated to the story
+- Use filesystem tools to help manage content
+- Discuss story planning, give feedback, or brainstorm freely"""
+
+WRITER_MODE_PROMPT = """## Mode: Writer
+
+You are in long-form writing mode. The user is working on a writing project.
+
+Current project: {project_name}
+Current file: {current_file}
+
+The user sends prompts describing what to write next. Your workflow:
+1. Use write_prose to generate the content (it auto-queries lore as needed)
+2. Present the generated text to the user in your response
+3. Wait for the user's reaction:
+   - If they accept (say "good", "accept", "keep it", "yes", etc.) → the text will be appended to the project file
+   - If they say "regenerate", "try again", "redo" → generate again with the same intent
+   - If they send a new prompt → discard the pending text and generate from the new prompt
+   - If they provide feedback like "make it darker" or "less dialogue" → regenerate with their notes
+
+IMPORTANT: Do NOT write to the project file until the user accepts. Present the text for review first.
+You have access to the current file contents below to maintain continuity.
+
+{file_context}"""
+
+ROLEPLAY_MODE_PROMPT = """## Mode: Roleplay
+
+You are in roleplay/chat mode. The user is engaged in an interactive narrative.
+
+Current chat: {project_name}
+Current file: {current_file}
+
+The user sends messages as their character or describes actions. Your workflow:
+1. Use write_prose to generate the response/continuation
+2. The generated text is automatically appended to the chat file
+3. Present it in your response
+
+Special commands the user might say:
+- "regenerate" / "try again" → Remove the last entry from the file, generate a new one with the same context
+- "delete that" / "remove last" → Remove the last entry from the file without regenerating
+- "undo" → Same as delete
+
+Otherwise, every exchange appends to the file naturally, building the ongoing narrative.
+
+{file_context}"""
 
 
 class Orchestrator:
@@ -196,11 +246,97 @@ class Orchestrator:
         self.persona = self._load_persona()
         self.conversation_history: list[dict] = []
 
+        # Mode state
+        self.mode: Mode = Mode.GENERAL
+        self.active_project: str | None = None  # e.g. "pale-city-novel"
+        self.active_file: str | None = None     # e.g. "chapter-03.md"
+        self.pending_content: str | None = None  # Writer mode: awaiting accept/reject
+        self.last_prompt: str | None = None      # For regenerate
+
         log.info(
             "Orchestrator initialized (persona: %d tokens, model: %s)",
             estimate_tokens(self.persona),
             self.model,
         )
+
+    # ── Mode management ───────────────────────────────────────────────
+
+    def set_mode(
+        self,
+        mode: Mode,
+        project: str | None = None,
+        file: str | None = None,
+    ) -> dict:
+        """Switch operating mode and optionally set active project/file."""
+        self.mode = mode
+        self.pending_content = None
+        self.last_prompt = None
+        self.conversation_history.clear()
+
+        if project is not None:
+            self.active_project = project
+        if file is not None:
+            self.active_file = file
+
+        # Ensure project directory exists for writer/roleplay modes
+        if mode in (Mode.WRITER, Mode.ROLEPLAY):
+            base_dir = self._mode_base_dir()
+            if base_dir and self.active_project:
+                project_dir = base_dir / self.active_project
+                project_dir.mkdir(parents=True, exist_ok=True)
+
+        log.info("Mode set to %s (project=%s, file=%s)", mode, self.active_project, self.active_file)
+        return {
+            "mode": mode.value,
+            "project": self.active_project,
+            "file": self.active_file,
+        }
+
+    def _mode_base_dir(self) -> Path | None:
+        """Base content directory for the current mode."""
+        if self.mode == Mode.WRITER:
+            return self.config.paths.writing
+        elif self.mode == Mode.ROLEPLAY:
+            return self.config.paths.chats
+        return None
+
+    def _active_file_path(self) -> Path | None:
+        """Full path to the active project file."""
+        base = self._mode_base_dir()
+        if base and self.active_project and self.active_file:
+            return base / self.active_project / self.active_file
+        return None
+
+    def _load_active_file_context(self, max_chars: int = 8000) -> str:
+        """Load content from the active file for context."""
+        path = self._active_file_path()
+        if path is None or not path.exists():
+            return ""
+        content = path.read_text(encoding="utf-8")
+        if len(content) <= max_chars:
+            return content
+        # Return tail, break at paragraph boundary
+        truncated = content[-max_chars:]
+        nl = truncated.find("\n\n")
+        if nl != -1 and nl < len(truncated) // 2:
+            truncated = truncated[nl + 2:]
+        return truncated
+
+    def list_projects(self) -> dict:
+        """List available projects for the current mode."""
+        base = self._mode_base_dir()
+        if base is None or not base.exists():
+            return {"projects": []}
+
+        projects = []
+        for d in sorted(base.iterdir()):
+            if d.is_dir():
+                files = sorted(f.name for f in d.glob("*.md"))
+                projects.append({"name": d.name, "files": files})
+
+        return {"projects": projects}
+
+    # ── Persona loading ───────────────────────────────────────────────
 
     def _load_persona(self) -> str:
         """Load persona files with tiered token budgeting (ADR-005)."""
@@ -209,7 +345,6 @@ class Orchestrator:
             log.warning("No persona directory found at %s, using minimal persona", persona_dir)
             return "You are a helpful creative writing collaborator."
 
-        # Load tiers in priority order
         tiers = ["core.md", "quirks.md", "references.md", "extended.md"]
         budget = self.config.persona.max_tokens
         sections: list[str] = []
@@ -226,51 +361,77 @@ class Orchestrator:
                 log.warning(
                     "Persona budget exceeded at %s (%d + %d > %d tokens). "
                     "Skipping remaining tiers.",
-                    tier_file,
-                    total_tokens,
-                    tokens,
-                    budget,
+                    tier_file, total_tokens, tokens, budget,
                 )
                 break
 
             sections.append(content)
             total_tokens += tokens
-            log.debug("Loaded persona tier %s (%d tokens)", tier_file, tokens)
 
         log.info("Persona loaded: %d tokens across %d tiers", total_tokens, len(sections))
         return "\n\n".join(sections)
 
-    def _build_system_prompt(self, story_context: str) -> str:
-        """Build the full system prompt with persona and context."""
-        parts = [
-            self.persona,
-            "\n\n## Your Capabilities\n\n"
-            "You have access to tools for:\n"
-            "- Querying lore (character details, locations, world facts)\n"
-            "- Writing prose scenes (automatically queries lore as needed)\n"
-            "- Reading, writing, listing, and searching files in the content directories\n"
-            "- Writing code change requests for the development team\n"
-            "- Delegating technical questions to a focused agent for accuracy\n\n"
-            "Use these tools proactively. Don't ask the user to do things you can do yourself.\n"
-            "When writing scenes, always use the write_scene tool rather than writing prose directly.\n"
-            "For technical/factual questions unrelated to the story, use delegate_technical.",
-        ]
+    # ── System prompt building ────────────────────────────────────────
 
-        if story_context:
-            parts.append(
-                f"\n\n## Current Story Context (most recent):\n\n{story_context}"
+    def _build_system_prompt(self) -> str:
+        """Build the full system prompt based on current mode."""
+        parts = [self.persona]
+
+        if self.mode == Mode.GENERAL:
+            story_context = _load_story_context(self.config.paths.story)
+            parts.append(GENERAL_MODE_PROMPT)
+            if story_context:
+                parts.append(f"\n## Current Story Context:\n\n{story_context}")
+
+        elif self.mode == Mode.WRITER:
+            file_content = self._load_active_file_context()
+            file_context = (
+                f"## Current File Contents:\n\n{file_content}"
+                if file_content
+                else "## Current File Contents:\n\n(empty — this is a new file)"
             )
+            parts.append(WRITER_MODE_PROMPT.format(
+                project_name=self.active_project or "(none)",
+                current_file=self.active_file or "(none)",
+                file_context=file_context,
+            ))
 
-        return "\n".join(parts)
+        elif self.mode == Mode.ROLEPLAY:
+            file_content = self._load_active_file_context()
+            file_context = (
+                f"## Current Chat Contents:\n\n{file_content}"
+                if file_content
+                else "## Current Chat Contents:\n\n(empty — new conversation)"
+            )
+            parts.append(ROLEPLAY_MODE_PROMPT.format(
+                project_name=self.active_project or "(none)",
+                current_file=self.active_file or "(none)",
+                file_context=file_context,
+            ))
+
+        parts.append(
+            "\n## Tools\n\n"
+            "Use tools proactively. Don't ask the user to do things you can do yourself.\n"
+            "For technical/factual questions unrelated to the story, use delegate_technical."
+        )
+
+        return "\n\n".join(parts)
+
+    # ── Main handler ──────────────────────────────────────────────────
 
     def handle(self, user_input: str) -> Response:
         """Process user input through the tool-use loop."""
-        story_context = _load_story_context(self.config.paths.story)
-        system_prompt = self._build_system_prompt(story_context)
+
+        # Handle mode-specific commands before the LLM
+        intercepted = self._handle_mode_commands(user_input)
+        if intercepted:
+            return intercepted
+
+        system_prompt = self._build_system_prompt()
 
         self.conversation_history.append({"role": "user", "content": user_input})
-
         messages = list(self.conversation_history)
+
         response_text = ""
         response_type = "discussion"
 
@@ -294,7 +455,7 @@ class Orchestrator:
                 tool_results = []
                 for block in response.content:
                     if block.type == "tool_use":
-                        result, rtype = self._execute_tool(block.name, block.input, story_context)
+                        result, rtype = self._execute_tool(block.name, block.input)
                         if rtype:
                             response_type = rtype
                         tool_results.append({
@@ -310,10 +471,10 @@ class Orchestrator:
             response_text = self._extract_text(response)
             break
 
-        # Store assistant response in conversation history
-        self.conversation_history.append({"role": "assistant", "content": response_text})
+        # Handle post-generation state for writer/roleplay modes
+        response_text, response_type = self._post_generation(response_text, response_type, user_input)
 
-        # Log the response
+        self.conversation_history.append({"role": "assistant", "content": response_text})
         self._log_response(user_input, response_text, response_type)
 
         return Response(
@@ -321,11 +482,129 @@ class Orchestrator:
             response_type=response_type,
         )
 
+    # ── Mode-specific command interception ────────────────────────────
+
+    def _handle_mode_commands(self, user_input: str) -> Response | None:
+        """Handle special commands before sending to the LLM."""
+        lower = user_input.strip().lower()
+
+        if self.mode == Mode.WRITER:
+            # Accept pending content
+            if self.pending_content and lower in (
+                "accept", "yes", "good", "keep it", "keep", "ok", "okay", "lgtm",
+            ):
+                self._append_to_active_file(self.pending_content)
+                self.pending_content = None
+                return Response(
+                    content="Written to file.",
+                    response_type="confirmation",
+                )
+
+            # Regenerate
+            if lower in ("regenerate", "try again", "redo", "again"):
+                self.pending_content = None
+                if self.last_prompt:
+                    # Will fall through to handle() with the original prompt
+                    return None  # Let it proceed with last_prompt re-sent below
+                return Response(
+                    content="Nothing to regenerate — send a writing prompt first.",
+                    response_type="discussion",
+                )
+
+        if self.mode == Mode.ROLEPLAY:
+            if lower in ("regenerate", "try again", "redo"):
+                self._remove_last_entry()
+                self.pending_content = None
+                if self.last_prompt:
+                    return None  # Fall through to regenerate
+                return Response(
+                    content="Removed last entry. Send a prompt to generate a new one.",
+                    response_type="confirmation",
+                )
+
+            if lower in ("delete that", "remove last", "undo", "delete"):
+                self._remove_last_entry()
+                return Response(
+                    content="Last entry removed.",
+                    response_type="confirmation",
+                )
+
+        return None
+
+    def _post_generation(self, response_text: str, response_type: str, user_input: str) -> tuple[str, str]:
+        """Handle post-generation state based on mode."""
+        if self.mode == Mode.WRITER and response_type == "prose":
+            # Store pending content, don't write yet
+            self.pending_content = self._extract_prose_from_response(response_text)
+            self.last_prompt = user_input
+            response_type = "prose_pending"
+
+        elif self.mode == Mode.ROLEPLAY and response_type == "prose":
+            # Auto-append to chat file
+            prose = self._extract_prose_from_response(response_text)
+            if prose:
+                self._append_to_active_file(prose)
+                self.last_prompt = user_input
+
+        return response_text, response_type
+
+    def _extract_prose_from_response(self, response_text: str) -> str | None:
+        """Extract generated prose from the response text.
+
+        The Orchestrator wraps prose in its own commentary. The actual
+        prose was generated by write_prose tool and is typically the
+        longest block of text. For now, return the full response text
+        and let the system prompt guide the model to present prose cleanly.
+        """
+        # TODO: Could be smarter about extracting just the prose from
+        # the Orchestrator's commentary, but for now the system prompt
+        # tells the model to present prose clearly.
+        return response_text if response_text.strip() else None
+
+    # ── File operations for modes ─────────────────────────────────────
+
+    def _append_to_active_file(self, content: str) -> None:
+        """Append content to the active project file."""
+        path = self._active_file_path()
+        if path is None:
+            log.warning("No active file to append to")
+            return
+
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "a", encoding="utf-8") as f:
+            if path.exists() and path.stat().st_size > 0:
+                f.write("\n\n")
+            f.write(content)
+
+        log.info("Appended %d chars to %s", len(content), path)
+
+    def _remove_last_entry(self) -> None:
+        """Remove the last entry (double-newline-separated block) from the active file."""
+        path = self._active_file_path()
+        if path is None or not path.exists():
+            log.warning("No active file to remove from")
+            return
+
+        content = path.read_text(encoding="utf-8")
+        if not content.strip():
+            return
+
+        # Split on double newlines, remove the last block
+        parts = content.rsplit("\n\n", 1)
+        if len(parts) > 1:
+            new_content = parts[0]
+        else:
+            new_content = ""
+
+        path.write_text(new_content, encoding="utf-8")
+        log.info("Removed last entry from %s", path)
+
+    # ── Tool execution ────────────────────────────────────────────────
+
     def _execute_tool(
         self,
         name: str,
         input_data: dict,
-        story_context: str,
     ) -> tuple[str, str | None]:
         """Execute a tool call and return (result_string, optional_response_type)."""
         log.info("Tool call: %s", name)
@@ -338,11 +617,21 @@ class Orchestrator:
                 "confidence": bundle.confidence,
             }), "lore_answer"
 
-        elif name == "write_scene":
-            result = self.writer.write_scene(
-                input_data["description"],
-                story_context,
-            )
+        elif name == "write_prose":
+            # Get context from active file if in writer/roleplay mode, else from story
+            if self.mode in (Mode.WRITER, Mode.ROLEPLAY):
+                context = self._load_active_file_context()
+            else:
+                context = _load_story_context(self.config.paths.story)
+
+            # Temporarily disable auto-append — we handle file writing ourselves
+            old_auto = self.config.prose_writer.auto_append_to_story
+            self.config.prose_writer.auto_append_to_story = False
+            try:
+                result = self.writer.write_scene(input_data["description"], context)
+            finally:
+                self.config.prose_writer.auto_append_to_story = old_auto
+
             return json.dumps({
                 "generated_text": result.generated_text,
                 "word_count": result.word_count,
@@ -370,24 +659,27 @@ class Orchestrator:
         else:
             return json.dumps({"error": f"Unknown tool: {name}"}), None
 
-    def _resolve_path(self, directory: str, relative_path: str) -> Path | None:
-        """Resolve a path within allowed content directories."""
-        dir_map = {
+    # ── Filesystem tool implementations ───────────────────────────────
+
+    def _dir_map(self) -> dict[str, Path]:
+        """Map directory names to paths."""
+        return {
             "lore": self.config.paths.lore,
             "story": self.config.paths.story,
+            "writing": self.config.paths.writing,
+            "chats": self.config.paths.chats,
             "code-requests": self.config.paths.code_requests,
         }
-        base = dir_map.get(directory)
+
+    def _resolve_path(self, directory: str, relative_path: str) -> Path | None:
+        base = self._dir_map().get(directory)
         if base is None:
             return None
-
         resolved = (base / relative_path).resolve()
-        # Ensure we haven't escaped the base directory
         try:
             resolved.relative_to(base.resolve())
         except ValueError:
             return None
-
         return resolved
 
     def _tool_read_file(self, input_data: dict) -> str:
@@ -398,7 +690,7 @@ class Orchestrator:
             return json.dumps({"error": f"File not found: {input_data['path']}"})
         try:
             content = path.read_text(encoding="utf-8")
-            return json.dumps({"content": content, "path": str(input_data["path"])})
+            return json.dumps({"content": content, "path": input_data["path"]})
         except Exception as e:
             return json.dumps({"error": str(e)})
 
@@ -414,12 +706,7 @@ class Orchestrator:
             return json.dumps({"error": str(e)})
 
     def _tool_list_files(self, input_data: dict) -> str:
-        dir_map = {
-            "lore": self.config.paths.lore,
-            "story": self.config.paths.story,
-            "code-requests": self.config.paths.code_requests,
-        }
-        base = dir_map.get(input_data["directory"])
+        base = self._dir_map().get(input_data["directory"])
         if base is None:
             return json.dumps({"error": "Invalid directory."})
 
@@ -437,12 +724,7 @@ class Orchestrator:
         return json.dumps({"files": files, "count": len(files)})
 
     def _tool_search_files(self, input_data: dict) -> str:
-        dir_map = {
-            "lore": self.config.paths.lore,
-            "story": self.config.paths.story,
-            "code-requests": self.config.paths.code_requests,
-        }
-        base = dir_map.get(input_data["directory"])
+        base = self._dir_map().get(input_data["directory"])
         if base is None:
             return json.dumps({"error": "Invalid directory."})
 
@@ -503,7 +785,6 @@ class Orchestrator:
         return json.dumps({"status": "ok", "file": filename})
 
     def _tool_delegate_technical(self, input_data: dict) -> str:
-        """Run a clean technical query without persona overhead."""
         log.info("Delegating technical query: %s", input_data["query"][:100])
         response = self.client.messages.create(
             model=self.model,
@@ -513,6 +794,8 @@ class Orchestrator:
         )
         return response.content[0].text
 
+    # ── Utilities ─────────────────────────────────────────────────────
+
     def _extract_text(self, response: anthropic.types.Message) -> str:
         parts = []
         for block in response.content:
@@ -521,7 +804,6 @@ class Orchestrator:
         return "\n\n".join(parts)
 
     def _log_response(self, user_input: str, response_text: str, response_type: str) -> None:
-        """Log the exchange to a response log file (ADR-009)."""
         log_dir = self.config.paths.story / "logs"
         log_dir.mkdir(parents=True, exist_ok=True)
 
@@ -531,7 +813,7 @@ class Orchestrator:
         timestamp = datetime.now().strftime("%H:%M:%S")
         entry = (
             f"\n\n---\n\n"
-            f"**[{timestamp}] User ({response_type}):**\n\n{user_input}\n\n"
+            f"**[{timestamp}] User ({self.mode.value}/{response_type}):**\n\n{user_input}\n\n"
             f"**[{timestamp}] Orchestrator:**\n\n{response_text}\n"
         )
 

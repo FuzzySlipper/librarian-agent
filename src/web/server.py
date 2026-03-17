@@ -16,7 +16,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from src.agents.librarian import Librarian
-from src.agents.orchestrator import Orchestrator
+from src.agents.orchestrator import Mode, Orchestrator
 from src.agents.prose_writer import ProseWriter
 from src.config import AppConfig, load_config, list_profiles
 
@@ -84,9 +84,13 @@ async def status():
 
     return {
         "status": "ready",
+        "mode": _orchestrator.mode.value,
+        "project": _orchestrator.active_project,
+        "file": _orchestrator.active_file,
         "lore_files": len(_orchestrator.librarian.lore),
         "lore_set": _config.lore.active or "(default)",
         "persona": _config.persona.active or "(default)",
+        "writing_style": _config.writing_style.active,
         "model": _config.models.orchestrator,
         "conversation_turns": len(_orchestrator.conversation_history) // 2,
     }
@@ -155,6 +159,52 @@ def _reinitialize_agents():
         _config.persona.active or "(default)",
         _config.lore.active or "(default)",
     )
+
+
+class ModeRequest(BaseModel):
+    mode: str  # "general", "writer", "roleplay"
+    project: str | None = None
+    file: str | None = None
+
+
+@app.post("/api/mode")
+async def set_mode(request: ModeRequest):
+    """Switch operating mode and optionally set active project/file."""
+    if _orchestrator is None:
+        return JSONResponse(status_code=503, content={"error": "System not initialized"})
+
+    try:
+        mode = Mode(request.mode)
+    except ValueError:
+        return JSONResponse(status_code=400, content={
+            "error": f"Invalid mode: {request.mode}. Must be general, writer, or roleplay."
+        })
+
+    result = _orchestrator.set_mode(mode, project=request.project, file=request.file)
+    return result
+
+
+@app.get("/api/mode")
+async def get_mode():
+    """Get current mode and active project/file."""
+    if _orchestrator is None:
+        return JSONResponse(status_code=503, content={"error": "System not initialized"})
+
+    return {
+        "mode": _orchestrator.mode.value,
+        "project": _orchestrator.active_project,
+        "file": _orchestrator.active_file,
+        "pending_content": _orchestrator.pending_content is not None,
+    }
+
+
+@app.get("/api/projects")
+async def get_projects():
+    """List available projects for the current mode."""
+    if _orchestrator is None:
+        return JSONResponse(status_code=503, content={"error": "System not initialized"})
+
+    return _orchestrator.list_projects()
 
 
 @app.get("/", response_class=HTMLResponse)

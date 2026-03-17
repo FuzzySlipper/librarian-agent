@@ -8,6 +8,8 @@ services:
     volumes:
       - ${CONTENT_DIR:-.}/lore/:/app/lore:ro
       - ${CONTENT_DIR:-.}/story/:/app/story
+      - ${CONTENT_DIR:-.}/writing/:/app/writing
+      - ${CONTENT_DIR:-.}/chats/:/app/chats
       - ${CONTENT_DIR:-.}/code-requests/:/app/code-requests
     environment:
       - CONFIG_PATH=/app/config.yaml

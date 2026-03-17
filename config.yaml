@@ -25,6 +25,8 @@ writing_style:
 paths:
   lore: ./lore
   story: ./story
+  writing: ./writing
+  chats: ./chats
   code_requests: ./code-requests
   persona: ./persona
   writing_styles: ./writing-styles
