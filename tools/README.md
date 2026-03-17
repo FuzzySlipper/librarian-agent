@@ -1,6 +1,50 @@
-# Migration Tools
+# Tools
 
-Tools for importing data from SillyTavern and other sources into the Narrative System.
+Utilities for the Narrative Orchestration System.
+
+## site_report.py
+
+Generates a structured diagnostic report for remote troubleshooting. When something isn't working, run this to collect system state into a report that can be sent to the developer.
+
+### When to use this
+
+If a user says something like "it's not working" or "I got an error," run this script first. It captures everything a remote developer needs to diagnose the problem without a back-and-forth Q&A.
+
+### Usage
+
+```bash
+# Basic report
+python tools/site_report.py
+
+# With a description of the problem
+python tools/site_report.py --issue "The librarian returns empty results when I ask about Elena"
+
+# Specify output location
+python tools/site_report.py --issue "Docker container won't start" -o ~/Desktop/
+```
+
+The report is written to `code-requests/` by default (where the developer picks up requests) and includes:
+- System info (OS, Python version, Docker status)
+- Project state (git branch, recent commits, missing files)
+- Content state (lore file count, story size, .env presence)
+- API key availability (not the key itself)
+- Dependency check
+- Recent session logs
+
+### For AI coding assistants
+
+If you are a Claude instance or other AI coding assistant helping a user with this project, and they report a problem:
+
+1. Run `python tools/site_report.py --issue "description of what the user reported"`
+2. Read the generated report
+3. If you can fix the issue, do so
+4. If you can't, tell the user to send the report file to Patch
+
+---
+
+## st_migrator.py
+
+Converts SillyTavern World Info (lorebooks) and Character Cards to markdown format.
 
 ## st_migrator.py
 

@@ -276,6 +276,18 @@ services:
 - [ ] Error messages are user-friendly
 - [ ] Logging for debugging, not print statements
 
+## Troubleshooting & Remote Support
+
+The users of this system are non-technical. If a user reports a problem:
+
+1. Run `python tools/site_report.py --issue "what the user described"`
+2. Read the generated report — it captures system state, project state, content state, and recent logs
+3. If you can diagnose and fix the issue, do so
+4. If you can't, tell the user to send the report file to Patch (the remote developer)
+5. You can also write a code change request to `code-requests/` if the fix requires code changes you're unsure about
+
+Reports land in `code-requests/` by default so they're visible to the developer on next review.
+
 ## When to Escalate
 
 If the coding agent is unsure about:
