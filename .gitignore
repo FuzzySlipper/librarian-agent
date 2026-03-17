@@ -209,5 +209,10 @@ __marimo__/
 # Claude Code
 .claude/
 
+# Frontend build artifacts and dependencies
+frontend/node_modules/
+frontend/dist/
+static/
+
 # Reference repos (cloned for analysis, not part of this project)
 reference/

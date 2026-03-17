@@ -47,6 +47,14 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Narrative System", lifespan=lifespan)
 
+# Serve React frontend static files if available (Docker build copies to static/)
+_static_dir = Path(__file__).resolve().parent.parent.parent / "static"
+_has_static = _static_dir.is_dir()
+if _has_static:
+    _assets_dir = _static_dir / "assets"
+    if _assets_dir.is_dir():
+        app.mount("/assets", StaticFiles(directory=str(_assets_dir)), name="static-assets")
+
 
 class ChatRequest(BaseModel):
     message: str
@@ -207,13 +215,105 @@ async def get_projects():
     return _orchestrator.list_projects()
 
 
+@app.post("/api/session/new")
+async def new_session():
+    """Clear conversation history, starting a fresh session."""
+    if _orchestrator is None:
+        return JSONResponse(status_code=503, content={"error": "System not initialized"})
+
+    _orchestrator.conversation_history.clear()
+    _orchestrator.pending_content = None
+    _orchestrator.last_prompt = None
+
+    return {"status": "ok", "message": "Session cleared"}
+
+
+@app.get("/api/lore")
+async def list_lore():
+    """List all lore files."""
+    if _config is None:
+        return JSONResponse(status_code=503, content={"error": "System not initialized"})
+
+    lore_path = Path(_config.active_lore_path)
+    if not lore_path.exists():
+        return {"files": []}
+
+    files = []
+    for p in sorted(lore_path.rglob("*.md")):
+        rel = str(p.relative_to(lore_path))
+        try:
+            content = p.read_text(encoding="utf-8")
+            # Rough token estimate
+            tokens = len(content) // 4
+        except Exception:
+            content = ""
+            tokens = 0
+        files.append({"path": rel, "tokens": tokens, "size": len(content)})
+
+    return {"files": files, "lore_path": str(lore_path)}
+
+
+@app.get("/api/lore/{file_path:path}")
+async def read_lore(file_path: str):
+    """Read a single lore file."""
+    if _config is None:
+        return JSONResponse(status_code=503, content={"error": "System not initialized"})
+
+    lore_path = Path(_config.active_lore_path)
+    resolved = (lore_path / file_path).resolve()
+
+    # Prevent path traversal
+    try:
+        resolved.relative_to(lore_path.resolve())
+    except ValueError:
+        return JSONResponse(status_code=403, content={"error": "Invalid path"})
+
+    if not resolved.exists():
+        return JSONResponse(status_code=404, content={"error": "File not found"})
+
+    content = resolved.read_text(encoding="utf-8")
+    return {"path": file_path, "content": content, "tokens": len(content) // 4}
+
+
+class LoreWriteRequest(BaseModel):
+    content: str
+
+
+@app.put("/api/lore/{file_path:path}")
+async def write_lore(file_path: str, request: LoreWriteRequest):
+    """Write a lore file. Reinitializes the Librarian to pick up changes."""
+    global _orchestrator
+
+    if _config is None:
+        return JSONResponse(status_code=503, content={"error": "System not initialized"})
+
+    lore_path = Path(_config.active_lore_path)
+    resolved = (lore_path / file_path).resolve()
+
+    try:
+        resolved.relative_to(lore_path.resolve())
+    except ValueError:
+        return JSONResponse(status_code=403, content={"error": "Invalid path"})
+
+    resolved.parent.mkdir(parents=True, exist_ok=True)
+    resolved.write_text(request.content, encoding="utf-8")
+
+    # Reinitialize agents so Librarian picks up the lore change
+    loop = asyncio.get_event_loop()
+    await loop.run_in_executor(None, _reinitialize_agents)
+
+    return {"status": "ok", "path": file_path, "tokens": len(request.content) // 4}
+
+
 @app.get("/", response_class=HTMLResponse)
 async def index():
-    """Serve the chat UI."""
+    """Serve the chat UI — React build if available, otherwise inline fallback."""
+    if _has_static:
+        return (_static_dir / "index.html").read_text()
     return HTML_PAGE
 
 
-# Inline HTML — single-file UI, no build step, mobile-friendly
+# Inline HTML fallback — used when frontend isn't built
 HTML_PAGE = """<!DOCTYPE html>
 <html lang="en">
 <head>
