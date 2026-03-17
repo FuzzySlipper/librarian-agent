@@ -1,0 +1,572 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>How the Narrative System Works</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    background: #0f0f1a;
+    color: #e0e0e0;
+    line-height: 1.6;
+    padding: 24px;
+    max-width: 900px;
+    margin: 0 auto;
+  }
+
+  h1 {
+    font-size: 28px;
+    margin-bottom: 8px;
+    color: #fff;
+  }
+
+  h2 {
+    font-size: 22px;
+    margin: 48px 0 16px;
+    color: #fff;
+  }
+
+  h3 {
+    font-size: 16px;
+    margin: 24px 0 8px;
+    color: #ccc;
+  }
+
+  .subtitle {
+    color: #888;
+    margin-bottom: 32px;
+    font-size: 15px;
+  }
+
+  p, li {
+    font-size: 15px;
+    color: #bbb;
+    margin-bottom: 12px;
+  }
+
+  ul { padding-left: 20px; }
+  li { margin-bottom: 6px; }
+
+  .section-label {
+    text-transform: uppercase;
+    font-size: 11px;
+    letter-spacing: 2px;
+    color: #e94560;
+    margin-bottom: 12px;
+    font-weight: 600;
+  }
+
+  /* Diagram containers */
+  .diagram {
+    background: #161628;
+    border-radius: 16px;
+    padding: 32px;
+    margin: 24px 0;
+    border: 1px solid #252545;
+  }
+
+  .diagram-title {
+    font-size: 14px;
+    color: #888;
+    text-align: center;
+    margin-bottom: 24px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+  }
+
+  /* The visual metaphor boxes */
+  .place {
+    background: #1e1e3a;
+    border-radius: 12px;
+    padding: 16px 20px;
+    margin: 8px 0;
+    border-left: 4px solid #444;
+    position: relative;
+  }
+
+  .place.you { border-left-color: #4ecdc4; }
+  .place.brain { border-left-color: #e94560; }
+  .place.library { border-left-color: #ffd93d; }
+  .place.writer { border-left-color: #6c5ce7; }
+  .place.desk { border-left-color: #a8e6cf; }
+  .place.toolbox { border-left-color: #ff8a5c; }
+  .place.cloud { border-left-color: #74b9ff; }
+  .place.problem { border-left-color: #ff6b6b; }
+
+  .place-name {
+    font-weight: 600;
+    font-size: 16px;
+    color: #fff;
+    margin-bottom: 4px;
+  }
+
+  .place-role {
+    font-size: 13px;
+    color: #999;
+  }
+
+  .place-icon {
+    font-size: 28px;
+    float: right;
+    margin-top: -4px;
+  }
+
+  /* Flow arrows */
+  .flow {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 4px 0;
+    color: #555;
+    font-size: 20px;
+  }
+
+  .flow-label {
+    font-size: 12px;
+    color: #666;
+    text-align: center;
+    margin: -4px 0 4px;
+  }
+
+  /* Side by side comparison */
+  .comparison {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 24px;
+    margin: 24px 0;
+  }
+
+  @media (max-width: 700px) {
+    .comparison { grid-template-columns: 1fr; }
+  }
+
+  .compare-col {
+    background: #161628;
+    border-radius: 16px;
+    padding: 24px;
+    border: 1px solid #252545;
+  }
+
+  .compare-col h3 {
+    margin-top: 0;
+    text-align: center;
+  }
+
+  /* Highlight callouts */
+  .callout {
+    background: #1a1a35;
+    border-radius: 12px;
+    padding: 16px 20px;
+    margin: 16px 0;
+    border: 1px solid #303060;
+  }
+
+  .callout-title {
+    font-weight: 600;
+    color: #e94560;
+    margin-bottom: 4px;
+    font-size: 14px;
+  }
+
+  .callout p {
+    margin: 0;
+    font-size: 14px;
+  }
+
+  /* Context meter */
+  .meter-container {
+    margin: 16px 0;
+  }
+
+  .meter-label {
+    display: flex;
+    justify-content: space-between;
+    font-size: 12px;
+    color: #888;
+    margin-bottom: 4px;
+  }
+
+  .meter {
+    height: 24px;
+    background: #1a1a35;
+    border-radius: 12px;
+    overflow: hidden;
+    display: flex;
+  }
+
+  .meter-segment {
+    height: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 10px;
+    color: #fff;
+    font-weight: 600;
+  }
+
+  .divider {
+    border: none;
+    border-top: 1px solid #252545;
+    margin: 40px 0;
+  }
+
+  .emoji { font-size: 18px; vertical-align: middle; }
+</style>
+</head>
+<body>
+
+<h1>How the Narrative System Works</h1>
+<p class="subtitle">A plain-language guide to what's running behind the scenes when you're writing stories</p>
+
+<hr class="divider">
+
+<!-- ==================== SECTION 1: THE OLD WAY ==================== -->
+
+<div class="section-label">First, how SillyTavern works</div>
+
+<h2>The Old Way: SillyTavern</h2>
+
+<p>Think of SillyTavern like a <strong>single room with a very forgetful assistant</strong>.</p>
+
+<div class="diagram">
+  <div class="diagram-title">What happens every time you send a message in ST</div>
+
+  <div class="place you">
+    <span class="place-icon">💬</span>
+    <div class="place-name">You type something</div>
+    <div class="place-role">"Elena enters the archive looking for the Thornfield records"</div>
+  </div>
+
+  <div class="flow">↓</div>
+
+  <div class="place brain">
+    <span class="place-icon">🧠</span>
+    <div class="place-name">ST stuffs EVERYTHING into one giant message</div>
+    <div class="place-role">Your character card + lorebook entries it found by keyword + the entire chat history + your message. Every. Single. Time.</div>
+  </div>
+
+  <div class="flow">↓</div>
+
+  <div class="place cloud">
+    <span class="place-icon">☁️</span>
+    <div class="place-name">Sent to the AI as one enormous package</div>
+    <div class="place-role">The AI reads the whole thing from scratch — it has no memory of last time. You're paying for all of it again.</div>
+  </div>
+
+  <div class="flow">↓</div>
+
+  <div class="place you">
+    <span class="place-icon">📖</span>
+    <div class="place-name">You get a response</div>
+    <div class="place-role">The AI wrote something, but it might have missed lore details because keyword matching is crude</div>
+  </div>
+</div>
+
+<div class="callout">
+  <div class="callout-title">Why this gets expensive and weird</div>
+  <p>Imagine hiring a writer who has amnesia. Every morning you have to re-read them your entire novel and all your world-building notes before they can write the next paragraph. That's what ST does — it "re-reads" everything on every single message. When your story is 100,000+ words, that's a lot of re-reading you're paying for.</p>
+</div>
+
+<div class="callout">
+  <div class="callout-title">Why lore gets missed</div>
+  <p>ST finds lore entries by searching for keywords in your message. If you write "Elena enters the archive" but your lorebook entry about the archive is tagged "Restricted Collection," ST won't find it. The AI then either skips the detail or makes something up.</p>
+</div>
+
+<hr class="divider">
+
+<!-- ==================== SECTION 2: THE NEW WAY ==================== -->
+
+<div class="section-label">Now, how the new system works</div>
+
+<h2>The New Way: Three Specialists Instead of One Forgetful Assistant</h2>
+
+<p>Instead of one overloaded room, think of this as a <strong>small creative studio with three people who each do one thing really well</strong>.</p>
+
+<div class="diagram">
+  <div class="diagram-title">Meet the team</div>
+
+  <div class="place brain">
+    <span class="place-icon">🎭</span>
+    <div class="place-name">The Orchestrator</div>
+    <div class="place-role"><strong>Your conversation partner.</strong> This is who you talk to. They have a personality, they remember what you've been discussing this session, and they figure out what you need. Think of them as a creative director — they don't do all the work themselves, they know who to ask.</div>
+  </div>
+
+  <div class="flow" style="margin: 12px 0;">⬇️ asks when needed ⬇️</div>
+
+  <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px;">
+    <div class="place library">
+      <span class="place-icon">📚</span>
+      <div class="place-name">The Librarian</div>
+      <div class="place-role"><strong>The lore expert.</strong> Has read every single one of your world-building files and remembers all of it. When anyone needs a fact — character details, location descriptions, history — they ask the Librarian. Never makes things up; if it's not in the files, they say so.</div>
+    </div>
+
+    <div class="place writer">
+      <span class="place-icon">✍️</span>
+      <div class="place-name">The Prose Writer</div>
+      <div class="place-role"><strong>The actual author.</strong> When you want a scene written, this is who writes it. Before writing, they automatically check with the Librarian for any details they need. You never have to tell them to look things up — they just do it.</div>
+    </div>
+  </div>
+</div>
+
+<h3>What happens when you ask for a scene:</h3>
+
+<div class="diagram">
+  <div class="diagram-title">Example: "Write Elena confronting the Archivist about the Thornfield records"</div>
+
+  <div class="place you">
+    <span class="place-icon">💬</span>
+    <div class="place-name">You describe what you want</div>
+    <div class="place-role">"Write the confrontation in the archive. Elena has the copied documents as proof."</div>
+  </div>
+
+  <div class="flow">↓</div>
+
+  <div class="place brain">
+    <span class="place-icon">🎭</span>
+    <div class="place-name">Orchestrator understands you want a scene</div>
+    <div class="place-role">Hands the request to the Prose Writer, along with what's happened recently in the story</div>
+  </div>
+
+  <div class="flow">↓</div>
+
+  <div class="place writer">
+    <span class="place-icon">✍️</span>
+    <div class="place-name">Writer starts planning the scene</div>
+    <div class="place-role">"I need to know about Elena, the Archivist, and the Thornfield records before I write..."</div>
+  </div>
+
+  <div class="flow">↓ asks the Librarian (automatically) ↓</div>
+
+  <div class="place library">
+    <span class="place-icon">📚</span>
+    <div class="place-name">Librarian provides the facts</div>
+    <div class="place-role">"Elena is a former apprentice, dark hair, dry humor. The Archivist is Aldric Senn, believes certain truths would destabilize the city. The Thornfield records are in the Restricted Collection..."</div>
+  </div>
+
+  <div class="flow">↓ armed with accurate details ↓</div>
+
+  <div class="place writer">
+    <span class="place-icon">✍️</span>
+    <div class="place-name">Writer crafts the scene</div>
+    <div class="place-role">Using the real lore, matching the established story tone, with the right character voices</div>
+  </div>
+
+  <div class="flow">↓</div>
+
+  <div class="place desk">
+    <span class="place-icon">📝</span>
+    <div class="place-name">Scene is saved to your story file</div>
+    <div class="place-role">Added to the end of your story draft. Nothing is overwritten or lost.</div>
+  </div>
+</div>
+
+<hr class="divider">
+
+<!-- ==================== SECTION 3: WHY CHEAPER ==================== -->
+
+<div class="section-label">The money part</div>
+
+<h2>Why This Costs Less</h2>
+
+<p>Remember the amnesia writer analogy? Here's the difference:</p>
+
+<div class="comparison">
+  <div class="compare-col">
+    <h3 style="color: #ff6b6b;">SillyTavern</h3>
+    <p>Re-reads <strong>everything</strong> every message. Your 100k-word story? Read again. All 50 lorebook entries? Read again. Every single time.</p>
+    <div class="meter-container">
+      <div class="meter-label"><span>What you pay for each message</span></div>
+      <div class="meter">
+        <div class="meter-segment" style="width: 40%; background: #e94560;">Lore (again)</div>
+        <div class="meter-segment" style="width: 45%; background: #6c5ce7;">Story (again)</div>
+        <div class="meter-segment" style="width: 10%; background: #4ecdc4;">Your msg</div>
+        <div class="meter-segment" style="width: 5%; background: #ffd93d;">Reply</div>
+      </div>
+    </div>
+    <p style="font-size: 13px; color: #ff6b6b;">You're paying for the red and purple parts over and over</p>
+  </div>
+
+  <div class="compare-col">
+    <h3 style="color: #4ecdc4;">New System</h3>
+    <p>The Librarian's lore knowledge is <strong>cached</strong> — the AI remembers it between messages. You only pay full price the first time.</p>
+    <div class="meter-container">
+      <div class="meter-label"><span>What you pay for each message</span></div>
+      <div class="meter">
+        <div class="meter-segment" style="width: 40%; background: #2a4a3a; color: #4ecdc4;">Lore (cached — 90% off)</div>
+        <div class="meter-segment" style="width: 20%; background: #2a2a5a; color: #6c5ce7;">Recent story</div>
+        <div class="meter-segment" style="width: 25%; background: #4ecdc4;">Your msg</div>
+        <div class="meter-segment" style="width: 15%; background: #ffd93d;">Reply</div>
+      </div>
+    </div>
+    <p style="font-size: 13px; color: #4ecdc4;">Cached portions cost ~10% of the original price</p>
+  </div>
+</div>
+
+<hr class="divider">
+
+<!-- ==================== SECTION 4: YOUR FILES ==================== -->
+
+<div class="section-label">Where your stuff lives</div>
+
+<h2>Your Files: Two Folders, That's It</h2>
+
+<p>Everything about your world and your story lives in simple text files on your computer. No database, no cloud storage, no special formats.</p>
+
+<div class="diagram">
+  <div class="diagram-title">Your content folder</div>
+
+  <div class="place desk">
+    <span class="place-icon">📁</span>
+    <div class="place-name">narrative-content/</div>
+    <div class="place-role">This is your folder. Everything creative lives here.</div>
+  </div>
+
+  <div style="padding-left: 24px;">
+    <div class="place library" style="margin-top: 8px;">
+      <span class="place-icon">📚</span>
+      <div class="place-name">lore/</div>
+      <div class="place-role">Your world-building files. Characters, locations, factions, history — each one is a text file you can open and edit in any text editor. The Librarian reads all of these.</div>
+    </div>
+
+    <div class="place writer" style="margin-top: 8px;">
+      <span class="place-icon">📖</span>
+      <div class="place-name">story/</div>
+      <div class="place-role">Your actual story draft. New scenes are added to the end. Nothing is ever deleted — the file only grows.</div>
+    </div>
+
+    <div class="place toolbox" style="margin-top: 8px;">
+      <span class="place-icon">🔧</span>
+      <div class="place-name">code-requests/</div>
+      <div class="place-role">If the system identifies something that needs a code fix, it writes a request here. Patch picks these up and handles the technical side.</div>
+    </div>
+  </div>
+</div>
+
+<div class="callout">
+  <div class="callout-title">You can edit lore files directly</div>
+  <p>Want to change a character detail? Open the file, edit it, save. Next time you start the system, it picks up the changes. You can also ask the Orchestrator to make edits for you — "change Elena's hair color to black" and it'll update the file.</p>
+</div>
+
+<hr class="divider">
+
+<!-- ==================== SECTION 5: THE TOOLBOX ==================== -->
+
+<div class="section-label">What the Orchestrator can do for you</div>
+
+<h2>It's More Than a Chatbot</h2>
+
+<p>The Orchestrator isn't just answering questions — it has tools. Think of it like talking to someone who has a desk, a filing cabinet, and a phone.</p>
+
+<div class="diagram">
+  <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
+
+    <div class="place library">
+      <div class="place-name">📚 Look up lore</div>
+      <div class="place-role">"What do we know about the Thornfield family?"</div>
+    </div>
+
+    <div class="place writer">
+      <div class="place-name">✍️ Write scenes</div>
+      <div class="place-role">"Write Elena discovering the hidden passage"</div>
+    </div>
+
+    <div class="place desk">
+      <div class="place-name">📝 Edit your files</div>
+      <div class="place-role">"Update Elena's file — she now knows about the tunnels"</div>
+    </div>
+
+    <div class="place toolbox">
+      <div class="place-name">🔍 Search everything</div>
+      <div class="place-role">"Find every mention of the Restricted Collection"</div>
+    </div>
+
+    <div class="place brain">
+      <div class="place-name">🎯 Answer technical questions</div>
+      <div class="place-role">"How do I back up my story files?" (drops the personality, answers straight)</div>
+    </div>
+
+    <div class="place toolbox">
+      <div class="place-name">🔧 Request code changes</div>
+      <div class="place-role">"The chapter splitting isn't working right" → writes a fix request for Patch</div>
+    </div>
+
+  </div>
+</div>
+
+<p>You just talk naturally. The system figures out which tool to use.</p>
+
+<hr class="divider">
+
+<!-- ==================== SECTION 6: CONTEXT METER ==================== -->
+
+<div class="section-label">New feature: knowing how full your context is</div>
+
+<h2>The Context Meter</h2>
+
+<p>One problem with SillyTavern is that you can't easily tell when you're running out of room. The AI has a limited amount it can "think about" at once (called the context window). When you hit the limit, it starts forgetting the oldest parts of your conversation.</p>
+
+<p>The new system will show you clearly:</p>
+
+<div class="diagram">
+  <div class="diagram-title">Context window usage</div>
+
+  <div class="meter-container">
+    <div class="meter-label"><span>Used</span><span>73% of 200k tokens</span></div>
+    <div class="meter" style="height: 36px; border-radius: 8px;">
+      <div class="meter-segment" style="width: 25%; background: #ffd93d;">Lore (cached)</div>
+      <div class="meter-segment" style="width: 8%; background: #e94560;">Persona</div>
+      <div class="meter-segment" style="width: 30%; background: #6c5ce7;">Story context</div>
+      <div class="meter-segment" style="width: 10%; background: #4ecdc4;">This conversation</div>
+      <div class="meter-segment" style="width: 27%; background: #1a1a35; color: #555;">Available</div>
+    </div>
+  </div>
+
+  <p style="font-size: 13px; color: #888; margin-top: 12px;">Tap the meter for details: which lore files are loaded, how much story context is included, and what gets dropped first if space runs low.</p>
+</div>
+
+<hr class="divider">
+
+<!-- ==================== SECTION 7: HOW TO ACCESS ==================== -->
+
+<div class="section-label">Connecting to it</div>
+
+<h2>How You Use It Day-to-Day</h2>
+
+<div class="diagram">
+  <div class="place cloud">
+    <span class="place-icon">🖥️</span>
+    <div class="place-name">The system runs on your computer</div>
+    <div class="place-role">Inside a container (a safe sandbox). It starts up, reads your lore files, and waits for you.</div>
+  </div>
+
+  <div class="flow">↓ connects over your WiFi ↓</div>
+
+  <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px;">
+    <div class="place you">
+      <div class="place-name">📱 iPad</div>
+      <div class="place-role">Open Safari, go to the bookmark. Feels like an app.</div>
+    </div>
+    <div class="place you">
+      <div class="place-name">💻 Laptop</div>
+      <div class="place-role">Open browser, same address.</div>
+    </div>
+    <div class="place you">
+      <div class="place-name">📱 Phone</div>
+      <div class="place-role">Works too, if you want.</div>
+    </div>
+  </div>
+</div>
+
+<p>Everything stays on your local network. Nothing is sent anywhere except the AI API calls (same as SillyTavern).</p>
+
+<hr class="divider">
+
+<p style="text-align: center; color: #555; font-size: 13px; margin-top: 32px;">
+  Questions? Just ask the Orchestrator — or ask Patch.
+</p>
+
+</body>
+</html>
