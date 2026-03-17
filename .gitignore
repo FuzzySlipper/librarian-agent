@@ -205,3 +205,9 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+# Claude Code
+.claude/
+
+# Reference repos (cloned for analysis, not part of this project)
+reference/
