@@ -14,21 +14,27 @@ Active work items grouped by development stage. Mark done with `[x]` but keep en
 
 ## Stage 2 — Librarian (CLI)
 
-- [ ] Scaffold `src/` directory structure per AGENTS.md
-- [ ] Implement `config.py` — Pydantic models for `config.yaml`
-- [ ] Implement `models.py` — shared data models (LoreBundle, ProseRequest, etc.)
-- [ ] Implement `Librarian` class — load all lore at startup, query via cached system prompt
+- [x] Scaffold `src/` directory structure per AGENTS.md
+- [x] Implement `config.py` — Pydantic models for `config.yaml`
+- [x] Implement `models.py` — shared data models (LoreBundle, ProseRequest, etc.)
+- [x] Implement `Librarian` class — load all lore at startup, query via cached system prompt
+  - Prompt caching enabled via `cache_control: {"type": "ephemeral"}` on system prompt
+  - JSON response parsing with fallback for non-JSON responses
+  - Cache hit/miss logging from API response usage stats
 - [ ] Auto-generate lore index from file frontmatter/first paragraphs (prep for Tier 2 scaling, ADR-002)
-- [ ] CLI entry point: `python -m src.agents.librarian --query "..."`
+- [x] CLI entry point: `python -m src.agents.librarian --query "..."` (also --interactive, --summary)
 - [ ] Test with 10-15 queries against real lore, verify accuracy and source attribution
 - [ ] Verify prompt caching is working (check API response headers)
 
 ## Stage 3 — Prose Writer (CLI)
 
-- [ ] Implement `ProseWriter` class with tool-use loop for Librarian queries
-  - Note: tool-use loop must handle multiple rounds — model calls tool, gets result, may call again or produce final text. Don't just check `stop_reason` once (see ADR pattern in AGENTS.md, the sketch there is incomplete)
-- [ ] Append-only story file output
-- [ ] CLI entry point: `python -m src.agents.prose_writer --scene "..."`
+- [x] Implement `ProseWriter` class with tool-use loop for Librarian queries
+  - Proper while loop: model calls query_lore, gets result, may call again or produce final text
+  - Handles multiple tool calls per response
+  - Logs each lore query made during generation
+- [x] Append-only story file output (auto-append configurable, --no-append flag)
+- [x] CLI entry point: `python -m src.agents.prose_writer --scene "..."` (also --interactive)
+- [x] Main entry point updated with /lore and /write commands
 - [ ] Test with 2-3 scenes, verify lore queries fire automatically
 
 ## Stage 4 — Orchestrator (CLI)
