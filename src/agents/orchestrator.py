@@ -243,6 +243,24 @@ ORCHESTRATOR_TOOLS = [
             "required": ["updates"],
         },
     },
+    {
+        "name": "generate_image",
+        "description": (
+            "Generate an image from a text description. Use this when a scene, "
+            "character, location, or moment would benefit from visual depiction. "
+            "Returns the image URL or an error if image generation is not configured."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "prompt": {
+                    "type": "string",
+                    "description": "Detailed visual description of the image to generate.",
+                },
+            },
+            "required": ["prompt"],
+        },
+    },
 ]
 
 # ── Mode-specific system prompt sections ──────────────────────────────
@@ -633,6 +651,7 @@ class Orchestrator:
                             "roll_dice": f"Rolling {block.input.get('notation', 'dice')}...",
                             "get_story_state": "Checking story state...",
                             "update_story_state": "Updating story state...",
+                            "generate_image": "Generating image...",
                         }
                         yield {"event": "status", "message": tool_labels.get(block.name, f"Using {block.name}...")}
 
@@ -842,6 +861,9 @@ class Orchestrator:
 
         elif name == "update_story_state":
             return self._tool_update_story_state(input_data), None
+
+        elif name == "generate_image":
+            return self._tool_generate_image(input_data), None
 
         else:
             return json.dumps({"error": f"Unknown tool: {name}"}), None
@@ -1125,6 +1147,18 @@ class Orchestrator:
             return json.dumps({"status": "ok", "state": state, "path": str(path.name)})
         except Exception as e:
             return json.dumps({"error": f"Failed to update state: {e}"})
+
+    def _tool_generate_image(self, input_data: dict) -> str:
+        """Generate an image via the imagegen service."""
+        from src.services.imagegen import generate_image
+        result = generate_image(input_data["prompt"])
+        if result.success:
+            return json.dumps({
+                "status": "ok",
+                "image_url": result.image_url,
+                "image_path": result.image_path,
+            })
+        return json.dumps({"status": "not_configured", "error": result.error})
 
     # ── Utilities ─────────────────────────────────────────────────────
 

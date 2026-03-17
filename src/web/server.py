@@ -21,6 +21,8 @@ from src.agents.librarian import Librarian
 from src.agents.orchestrator import Mode, Orchestrator
 from src.agents.prose_writer import ProseWriter
 from src.config import AppConfig, load_config, list_profiles
+from src.services.council import run_council, format_council_for_orchestrator
+from src.services.imagegen import generate_image
 
 log = logging.getLogger(__name__)
 
@@ -47,6 +49,12 @@ async def lifespan(app: FastAPI):
     if portraits_dir.is_dir():
         app.mount("/portraits", StaticFiles(directory=str(portraits_dir)), name="portraits")
         log.info("Portraits directory mounted: %s", portraits_dir)
+
+    # Mount generated-images directory for serving generated images
+    gen_images_dir = Path("generated-images")
+    gen_images_dir.mkdir(exist_ok=True)
+    app.mount("/generated-images", StaticFiles(directory=str(gen_images_dir)), name="generated-images")
+    log.info("Generated images directory mounted: %s", gen_images_dir)
 
     log.info("Agents initialized, server ready")
     yield
@@ -411,6 +419,103 @@ async def write_lore(file_path: str, request: LoreWriteRequest):
     await loop.run_in_executor(None, _reinitialize_agents)
 
     return {"status": "ok", "path": file_path, "tokens": len(request.content) // 4}
+
+
+# ── Council endpoint ──────────────────────────────────────────────────
+
+
+class CouncilRequest(BaseModel):
+    query: str
+
+
+@app.post("/api/council")
+async def council_query(request: CouncilRequest):
+    """Run a query through the council and return raw results + orchestrator synthesis.
+
+    The council fan-out runs in a thread pool, then results are fed to the
+    orchestrator for synthesis via handle_stream.
+    """
+    if _orchestrator is None or _config is None:
+        return JSONResponse(status_code=503, content={"error": "System not initialized"})
+
+    council_dir = Path(_config.paths.council)
+
+    queue: Queue = Queue()
+
+    def _run():
+        try:
+            # Step 1: Fan out to council members
+            queue.put({"event": "status", "message": "Gathering council responses..."})
+            council_result = run_council(request.query, council_dir)
+
+            member_count = len(council_result.get("members", []))
+            errors = sum(1 for m in council_result.get("members", []) if m.get("error"))
+            queue.put({"event": "status", "message": f"Council returned ({member_count} members, {errors} errors). Synthesizing..."})
+
+            # Step 2: Feed to orchestrator for synthesis
+            orchestrator_prompt = format_council_for_orchestrator(council_result)
+            for event in _orchestrator.handle_stream(orchestrator_prompt):
+                queue.put(event)
+        except Exception as e:
+            queue.put({"event": "error", "message": str(e)})
+        finally:
+            queue.put(None)
+
+    loop = asyncio.get_event_loop()
+    loop.run_in_executor(None, _run)
+
+    async def event_generator():
+        while True:
+            try:
+                event = await loop.run_in_executor(None, partial(queue.get, timeout=120))
+            except Empty:
+                yield "event: ping\ndata: {}\n\n"
+                continue
+
+            if event is None:
+                break
+
+            event_type = event.pop("event", "status")
+            if event_type == "done":
+                event["portrait"] = _get_current_portrait()
+            yield f"event: {event_type}\ndata: {json.dumps(event)}\n\n"
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+# ── Image generation endpoint ────────────────────────────────────────
+
+
+class ImageRequest(BaseModel):
+    prompt: str
+
+
+@app.post("/api/imagine")
+async def imagine(request: ImageRequest):
+    """Generate an image from a text prompt. TBD backend."""
+    loop = asyncio.get_event_loop()
+    result = await loop.run_in_executor(None, partial(generate_image, request.prompt))
+
+    if result.success:
+        return {
+            "status": "ok",
+            "image_url": result.image_url,
+            "image_path": result.image_path,
+            "prompt": result.prompt,
+        }
+    else:
+        return JSONResponse(
+            status_code=501,
+            content={"status": "not_configured", "error": result.error, "prompt": result.prompt},
+        )
 
 
 @app.get("/", response_class=HTMLResponse)

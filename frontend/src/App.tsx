@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { getMode, getStatus, newSession, sendChatStream } from "./api";
+import { getMode, getStatus, newSession, sendChatStream, setMode as apiSetMode } from "./api";
 import type { Message, MessageVariant, Mode, Status } from "./types";
+import { parseCommand, executeCommand } from "./commands";
+import type { CommandContext } from "./commands";
 import HeaderBar from "./components/HeaderBar";
 import MessageBubble from "./components/MessageBubble";
 import InputBar from "./components/InputBar";
@@ -138,6 +140,84 @@ function App() {
   }
 
   async function handleSend(text: string) {
+    const parsed = parseCommand(text);
+
+    if (parsed) {
+      // Build command context
+      const ctx: CommandContext = {
+        status,
+        mode,
+        openProfile: () => setProfileOpen(true),
+        openMode: () => setModeOpen(true),
+        openLore: () => setLoreOpen(true),
+        openContext: () => setContextOpen(true),
+        newSession: async () => {
+          await newSession();
+          setMessages([]);
+          setHasPending(false);
+          refreshStatus();
+        },
+        clearMessages: () => setMessages([]),
+        setMode: async (m: Mode) => {
+          await apiSetMode(m);
+          refreshStatus();
+        },
+        refreshStatus,
+        streamRequest: async (fetcher) => {
+          // Reuse the same streaming UI as doSend
+          setSending(true);
+          setStreamStatus("Connecting...");
+          const abort = new AbortController();
+          abortRef.current = abort;
+
+          try {
+            await fetcher(
+              (event) => {
+                if (event.type === "status") {
+                  setStreamStatus(event.data.message as string);
+                } else if (event.type === "tool") {
+                  setStreamStatus(`Using ${event.data.name}...`);
+                } else if (event.type === "done") {
+                  addResponseMessage(
+                    event.data.content as string,
+                    event.data.response_type as string,
+                    event.data.portrait as string | null | undefined,
+                  );
+                  setStreamStatus(null);
+                  refreshStatus();
+                } else if (event.type === "error") {
+                  addResponseMessage(`Error: ${event.data.message}`, "error");
+                  setStreamStatus(null);
+                }
+              },
+              abort.signal,
+            );
+          } catch (err) {
+            if ((err as Error).name !== "AbortError") {
+              addResponseMessage(
+                `Error: ${err instanceof Error ? err.message : "Connection failed"}`,
+                "error",
+              );
+            }
+            setStreamStatus(null);
+          } finally {
+            setSending(false);
+            abortRef.current = null;
+          }
+        },
+      };
+
+      const result = await executeCommand(parsed.name, parsed.args, ctx);
+      if (result === null) {
+        // Unknown command — show error
+        addSystemMessage(`Unknown command \`/${parsed.name}\`. Type \`/help\` for available commands.`);
+      } else if (result.output) {
+        addSystemMessage(result.output);
+      }
+      return;
+    }
+
+    // Normal LLM message
     const userMsg: Message = {
       id: crypto.randomUUID(),
       role: "user",
@@ -147,6 +227,16 @@ function App() {
     setMessages((prev) => [...prev, userMsg]);
     addAsVariantRef.current = false;
     await doSend(text);
+  }
+
+  function addSystemMessage(content: string) {
+    const msg: Message = {
+      id: crypto.randomUUID(),
+      role: "system",
+      content,
+      timestamp: Date.now(),
+    };
+    setMessages((prev) => [...prev, msg]);
   }
 
   function handleStop() {

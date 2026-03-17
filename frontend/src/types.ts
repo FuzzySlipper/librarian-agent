@@ -9,7 +9,7 @@ export interface MessageVariant {
 
 export interface Message {
   id: string;
-  role: "user" | "assistant";
+  role: "user" | "assistant" | "system";
   content: string;
   responseType?: string;
   timestamp: number;

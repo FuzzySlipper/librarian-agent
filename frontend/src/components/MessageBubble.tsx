@@ -11,6 +11,7 @@ interface MessageBubbleProps {
 
 export default function MessageBubble({ message, mode, onEdit, onSwipe }: MessageBubbleProps) {
   const isUser = message.role === "user";
+  const isSystem = message.role === "system";
   const isProse = message.responseType === "prose" || message.responseType === "prose_pending";
   const isPending = message.responseType === "prose_pending";
   const [editing, setEditing] = useState(false);
@@ -131,6 +132,19 @@ export default function MessageBubble({ message, mode, onEdit, onSwipe }: Messag
       )}
     </div>
   );
+
+  // System messages: centered, muted style
+  if (isSystem) {
+    return (
+      <div className="flex justify-center">
+        <div className="max-w-[90%] sm:max-w-[80%] rounded-lg px-4 py-2.5 text-[13px] text-text-muted bg-surface/50 border border-border/50 font-mono">
+          <div className="prose prose-invert prose-sm max-w-none [&_p]:mb-1.5 [&_p:last-child]:mb-0 [&_code]:text-accent [&_code]:text-[12px]">
+            <ReactMarkdown>{message.content}</ReactMarkdown>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   // Roleplay mode with portrait: IM-style layout
   if (showPortrait) {

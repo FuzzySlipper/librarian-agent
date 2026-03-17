@@ -83,6 +83,61 @@ export async function sendChatStream(
   }
 }
 
+export async function sendCouncilStream(
+  query: string,
+  onEvent: (event: StreamEvent) => void,
+  signal?: AbortSignal,
+): Promise<void> {
+  const res = await fetch("/api/council", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ query }),
+    signal,
+  });
+
+  if (!res.ok) {
+    throw new Error(`${res.status}: ${await res.text()}`);
+  }
+
+  const reader = res.body?.getReader();
+  if (!reader) throw new Error("No response body");
+
+  const decoder = new TextDecoder();
+  let buffer = "";
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split("\n");
+    buffer = lines.pop() || "";
+
+    let currentEvent = "status";
+    for (const line of lines) {
+      if (line.startsWith("event: ")) {
+        currentEvent = line.slice(7).trim();
+      } else if (line.startsWith("data: ")) {
+        try {
+          const data = JSON.parse(line.slice(6));
+          onEvent({ type: currentEvent as StreamEvent["type"], data });
+        } catch {
+          // Skip malformed data
+        }
+      }
+    }
+  }
+}
+
+export async function requestImage(
+  prompt: string,
+): Promise<{ status: string; image_url?: string; error?: string; prompt: string }> {
+  return request("/api/imagine", {
+    method: "POST",
+    body: JSON.stringify({ prompt }),
+  });
+}
+
 export async function getProfiles(): Promise<Profiles> {
   return request("/api/profiles");
 }
