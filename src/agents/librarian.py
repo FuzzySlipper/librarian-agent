@@ -56,13 +56,15 @@ class Librarian:
         self.config = config
         self.model = config.models.librarian
         self.client = anthropic.Anthropic()
-        self.lore = load_lore_files(config.paths.lore)
+        self.lore_path = config.active_lore_path
+        self.lore = load_lore_files(self.lore_path)
         self.system_prompt = self._build_system_prompt()
 
         token_est = estimate_tokens(self.system_prompt)
         log.info(
-            "Librarian initialized: %d lore files, ~%d tokens in system prompt",
+            "Librarian initialized: %d lore files from %s, ~%d tokens in system prompt",
             len(self.lore),
+            self.lore_path,
             token_est,
         )
 

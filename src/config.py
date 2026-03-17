@@ -26,12 +26,18 @@ class ProseWriterConfig(BaseModel):
 
 class PersonaConfig(BaseModel):
     max_tokens: int = 2000
+    active: str | None = None  # Subdirectory name, None = use root persona/
+
+
+class LoreConfig(BaseModel):
+    active: str | None = None  # Subdirectory name, None = use root lore/
 
 
 class PathsConfig(BaseModel):
     lore: Path = Path("./lore")
     story: Path = Path("./story")
     code_requests: Path = Path("./code-requests")
+    persona: Path = Path("./persona")
 
 
 class AppConfig(BaseModel):
@@ -40,7 +46,22 @@ class AppConfig(BaseModel):
     librarian: LibrarianConfig = Field(default_factory=LibrarianConfig)
     prose_writer: ProseWriterConfig = Field(default_factory=ProseWriterConfig)
     persona: PersonaConfig = Field(default_factory=PersonaConfig)
+    lore: LoreConfig = Field(default_factory=LoreConfig)
     paths: PathsConfig = Field(default_factory=PathsConfig)
+
+    @property
+    def active_lore_path(self) -> Path:
+        """Resolved lore directory based on active lore set."""
+        if self.lore.active:
+            return self.paths.lore / self.lore.active
+        return self.paths.lore
+
+    @property
+    def active_persona_path(self) -> Path:
+        """Resolved persona directory based on active persona."""
+        if self.persona.active:
+            return self.paths.persona / self.persona.active
+        return self.paths.persona
 
 
 def load_config(
@@ -61,6 +82,35 @@ def load_config(
     if config_path.exists():
         with open(config_path) as f:
             raw = yaml.safe_load(f) or {}
+        # Strip None values so Pydantic uses defaults
+        raw = {k: v for k, v in raw.items() if v is not None}
         return AppConfig(**raw)
 
     return AppConfig()
+
+
+def list_profiles(config: AppConfig) -> dict[str, list[str]]:
+    """Discover available persona and lore profiles."""
+    profiles: dict[str, list[str]] = {"personas": [], "lore_sets": []}
+
+    # Scan persona directory for subdirectories containing .md files
+    persona_dir = config.paths.persona
+    if persona_dir.exists():
+        for sub in sorted(persona_dir.iterdir()):
+            if sub.is_dir() and any(sub.glob("*.md")):
+                profiles["personas"].append(sub.name)
+        # If root has .md files but no subdirs, there's just the default
+        if not profiles["personas"] and any(persona_dir.glob("*.md")):
+            profiles["personas"].append("(default)")
+
+    # Scan lore directory for subdirectories containing .md files
+    lore_dir = config.paths.lore
+    if lore_dir.exists():
+        for sub in sorted(lore_dir.iterdir()):
+            if sub.is_dir() and (any(sub.glob("*.md")) or any(sub.rglob("*.md"))):
+                profiles["lore_sets"].append(sub.name)
+        # If root has .md files directly, there's a default set
+        if any(lore_dir.glob("*.md")):
+            profiles["lore_sets"].insert(0, "(default)")
+
+    return profiles

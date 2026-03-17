@@ -4,11 +4,11 @@ services:
     ports:
       - "8000:8000"
     env_file:
-      - ${CONTENT_DIR:-.}/narrative-content/.env
+      - ${CONTENT_DIR:-.}/.env
     volumes:
-      - ${CONTENT_DIR:-.}/narrative-content/lore:/app/lore:ro
-      - ${CONTENT_DIR:-.}/narrative-content/story:/app/story
-      - ${CONTENT_DIR:-.}/narrative-content/code-requests:/app/code-requests
+      - ${CONTENT_DIR:-.}/lore/:/app/lore:ro
+      - ${CONTENT_DIR:-.}/story/:/app/story
+      - ${CONTENT_DIR:-.}/code-requests/:/app/code-requests
     environment:
       - CONFIG_PATH=/app/config.yaml
     restart: unless-stopped

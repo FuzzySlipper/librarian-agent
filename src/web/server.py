@@ -18,7 +18,7 @@ from pydantic import BaseModel
 from src.agents.librarian import Librarian
 from src.agents.orchestrator import Orchestrator
 from src.agents.prose_writer import ProseWriter
-from src.config import AppConfig, load_config
+from src.config import AppConfig, load_config, list_profiles
 
 log = logging.getLogger(__name__)
 
@@ -85,9 +85,70 @@ async def status():
     return {
         "status": "ready",
         "lore_files": len(_orchestrator.librarian.lore),
+        "lore_set": _config.lore.active or "(default)",
+        "persona": _config.persona.active or "(default)",
         "model": _config.models.orchestrator,
         "conversation_turns": len(_orchestrator.conversation_history) // 2,
     }
+
+
+@app.get("/api/profiles")
+async def profiles():
+    """List available persona and lore profiles."""
+    if _config is None:
+        return JSONResponse(status_code=503, content={"error": "System not initialized"})
+
+    discovered = list_profiles(_config)
+    return {
+        "personas": discovered["personas"],
+        "lore_sets": discovered["lore_sets"],
+        "active_persona": _config.persona.active or "(default)",
+        "active_lore": _config.lore.active or "(default)",
+    }
+
+
+class ProfileRequest(BaseModel):
+    persona: str | None = None
+    lore_set: str | None = None
+
+
+@app.post("/api/profiles/switch")
+async def switch_profile(request: ProfileRequest):
+    """Switch active persona and/or lore set. Reinitializes agents."""
+    global _orchestrator, _config
+
+    if _config is None:
+        return JSONResponse(status_code=503, content={"error": "System not initialized"})
+
+    # Update config
+    if request.persona is not None:
+        _config.persona.active = None if request.persona == "(default)" else request.persona
+    if request.lore_set is not None:
+        _config.lore.active = None if request.lore_set == "(default)" else request.lore_set
+
+    # Reinitialize agents with new profile
+    loop = asyncio.get_event_loop()
+    await loop.run_in_executor(None, _reinitialize_agents)
+
+    return {
+        "status": "ok",
+        "active_persona": _config.persona.active or "(default)",
+        "active_lore": _config.lore.active or "(default)",
+        "lore_files": len(_orchestrator.librarian.lore) if _orchestrator else 0,
+    }
+
+
+def _reinitialize_agents():
+    """Rebuild the agent chain with current config. Runs in thread pool."""
+    global _orchestrator
+    librarian = Librarian(_config)
+    writer = ProseWriter(librarian, _config)
+    _orchestrator = Orchestrator(librarian, writer, _config)
+    log.info(
+        "Agents reinitialized: persona=%s, lore=%s",
+        _config.persona.active or "(default)",
+        _config.lore.active or "(default)",
+    )
 
 
 @app.get("/", response_class=HTMLResponse)

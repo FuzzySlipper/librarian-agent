@@ -204,9 +204,9 @@ class Orchestrator:
 
     def _load_persona(self) -> str:
         """Load persona files with tiered token budgeting (ADR-005)."""
-        persona_dir = Path("persona")
+        persona_dir = self.config.active_persona_path
         if not persona_dir.exists():
-            log.warning("No persona directory found, using minimal persona")
+            log.warning("No persona directory found at %s, using minimal persona", persona_dir)
             return "You are a helpful creative writing collaborator."
 
         # Load tiers in priority order

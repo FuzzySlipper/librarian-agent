@@ -14,8 +14,13 @@ prose_writer:
 
 persona:
   max_tokens: 2000
+  # active: narrator        # Subdirectory of paths.persona to use (omit for root)
+
+lore:
+  # active: pale-city       # Subdirectory of paths.lore to use (omit for root)
 
 paths:
   lore: ./lore
   story: ./story
   code_requests: ./code-requests
+  persona: ./persona
