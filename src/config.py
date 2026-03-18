@@ -37,6 +37,17 @@ class WritingStyleConfig(BaseModel):
     active: str = "default"  # Filename (without .md) in paths.writing_styles
 
 
+class ForgeConfig(BaseModel):
+    max_revisions: int = 3
+    review_threshold: float = 7.0
+    chapter_max_tokens: int = 8192
+    pause_after_ch1: bool = True
+    quality_pass: bool = True
+    writer_model: str | None = None    # None = use models.prose_writer
+    reviewer_model: str | None = None  # None = use models.librarian (cost-effective)
+    planner_model: str | None = None   # None = use models.orchestrator
+
+
 class PathsConfig(BaseModel):
     lore: Path = Path("./lore")
     story: Path = Path("./story")
@@ -49,6 +60,8 @@ class PathsConfig(BaseModel):
     council: Path = Path("./council")
     layouts: Path = Path("./layouts")
     layout_images: Path = Path("./layout-images")
+    forge: Path = Path("./forge")
+    forge_prompts: Path = Path("./forge-prompts")
 
 
 class AppConfig(BaseModel):
@@ -59,6 +72,7 @@ class AppConfig(BaseModel):
     persona: PersonaConfig = Field(default_factory=PersonaConfig)
     lore: LoreConfig = Field(default_factory=LoreConfig)
     writing_style: WritingStyleConfig = Field(default_factory=WritingStyleConfig)
+    forge: ForgeConfig = Field(default_factory=ForgeConfig)
     paths: PathsConfig = Field(default_factory=PathsConfig)
 
     @property

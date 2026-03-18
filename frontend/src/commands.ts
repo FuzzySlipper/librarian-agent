@@ -338,6 +338,107 @@ const commands: Record<string, CommandDef> = {
       }
     },
   },
+
+  forge: {
+    description: "Manage StoryForge projects",
+    usage: "new <name> | start <name> | status <name> | pause <name> | approve <name> | list",
+    handler: async (args, ctx) => {
+      const parts = args.trim().split(/\s+/);
+      const sub = parts[0]?.toLowerCase();
+      const name = parts.slice(1).join("-");
+
+      if (!sub || sub === "list") {
+        try {
+          const res = await fetch("/api/forge/projects");
+          const data = await res.json();
+          if (!data.projects?.length) {
+            return { output: "No forge projects yet. Use `/forge new <name>` to create one." };
+          }
+          const lines = data.projects.map(
+            (p: { name: string; stage: string; chapter_count: number; paused: boolean }) =>
+              `- **${p.name}** — stage: ${p.stage}, chapters: ${p.chapter_count}${p.paused ? " (paused)" : ""}`,
+          );
+          return { output: lines.join("\n") };
+        } catch {
+          return { output: "Error listing forge projects." };
+        }
+      }
+
+      if (sub === "new") {
+        if (!name) return { output: "Usage: `/forge new <project-name>`" };
+        try {
+          const res = await fetch("/api/forge/create", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ name }),
+          });
+          const data = await res.json();
+          if (data.status === "ok") {
+            await ctx.setMode("forge" as Mode);
+            return { output: `Forge project **${name}** created. You're now in planning mode — describe your story idea.` };
+          }
+          return { output: data.error || "Failed to create project." };
+        } catch {
+          return { output: "Error creating forge project." };
+        }
+      }
+
+      if (sub === "start") {
+        if (!name) return { output: "Usage: `/forge start <project-name>`" };
+        const { sendForgeStream } = await import("./forge");
+        await ctx.streamRequest((onEvent, signal) => sendForgeStream(name, onEvent, signal));
+        return { output: null, streaming: true };
+      }
+
+      if (sub === "status") {
+        if (!name) return { output: "Usage: `/forge status <project-name>`" };
+        try {
+          const res = await fetch(`/api/forge/${encodeURIComponent(name)}/status`);
+          const data = await res.json();
+          if (data.error) return { output: `Error: ${data.error}` };
+          const m = data.manifest;
+          const done = Object.values(m.chapters as Record<string, { status: string }>).filter(
+            (c) => c.status === "done",
+          ).length;
+          const flagged = Object.values(m.chapters as Record<string, { status: string }>).filter(
+            (c) => c.status === "flagged",
+          ).length;
+          return {
+            output:
+              `**${m.project_name}** — stage: ${m.stage}${m.paused ? " (paused)" : ""}\n` +
+              `Chapters: ${done} done, ${flagged} flagged, ${m.chapter_count} total\n` +
+              `Tokens: ${(m.stats.total_input_tokens + m.stats.total_output_tokens).toLocaleString()}`,
+          };
+        } catch {
+          return { output: "Error fetching forge status." };
+        }
+      }
+
+      if (sub === "pause") {
+        if (!name) return { output: "Usage: `/forge pause <project-name>`" };
+        try {
+          const res = await fetch(`/api/forge/${encodeURIComponent(name)}/pause`, { method: "POST" });
+          const data = await res.json();
+          return { output: data.status === "ok" ? "Pipeline paused." : data.error || "Failed." };
+        } catch {
+          return { output: "Error pausing pipeline." };
+        }
+      }
+
+      if (sub === "approve") {
+        if (!name) return { output: "Usage: `/forge approve <project-name>`" };
+        try {
+          const res = await fetch(`/api/forge/${encodeURIComponent(name)}/approve`, { method: "POST" });
+          const data = await res.json();
+          return { output: data.status === "ok" ? "Chapter 1 approved. Run `/forge start " + name + "` to continue." : data.error || "Failed." };
+        } catch {
+          return { output: "Error approving chapter." };
+        }
+      }
+
+      return { output: "Unknown subcommand. Usage: `/forge new|start|status|pause|approve|list`" };
+    },
+  },
 };
 
 /**

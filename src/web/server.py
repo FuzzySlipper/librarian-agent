@@ -273,7 +273,7 @@ def _reinitialize_agents():
 
 
 class ModeRequest(BaseModel):
-    mode: str  # "general", "writer", "roleplay"
+    mode: str  # "general", "writer", "roleplay", "forge"
     project: str | None = None
     file: str | None = None
 
@@ -699,6 +699,169 @@ async def tts_providers():
         "has_browser": "browser" in providers,
         "has_server": any(p != "browser" for p in providers),
     }
+
+
+# ── StoryForge endpoints ─────────────────────────────────────────────
+
+
+class ForgeCreateRequest(BaseModel):
+    name: str
+
+
+@app.post("/api/forge/create")
+async def forge_create(request: ForgeCreateRequest):
+    """Create a new forge project and switch to forge planning mode."""
+    if _orchestrator is None or _config is None:
+        return JSONResponse(status_code=503, content={"error": "System not initialized"})
+
+    from src.services.forge import ForgeProject
+
+    project = ForgeProject(request.name, _config)
+    loop = asyncio.get_event_loop()
+    manifest = await loop.run_in_executor(None, project.create)
+
+    # Switch orchestrator to forge mode
+    _orchestrator.set_mode(Mode.FORGE, project=request.name)
+
+    return {
+        "status": "ok",
+        "project": request.name,
+        "manifest": manifest.model_dump(),
+    }
+
+
+@app.get("/api/forge/projects")
+async def forge_list():
+    """List all forge projects with their current stage."""
+    if _config is None:
+        return JSONResponse(status_code=503, content={"error": "System not initialized"})
+
+    from src.services.forge import list_forge_projects
+
+    projects = list_forge_projects(_config)
+    return {"projects": projects}
+
+
+@app.get("/api/forge/{project}/status")
+async def forge_status(project: str):
+    """Get detailed status for a forge project."""
+    if _config is None:
+        return JSONResponse(status_code=503, content={"error": "System not initialized"})
+
+    from src.services.forge import ForgeProject
+
+    fp = ForgeProject(project, _config)
+    try:
+        manifest = fp.load()
+        return {"status": "ok", "manifest": manifest.model_dump()}
+    except FileNotFoundError:
+        return JSONResponse(status_code=404, content={"error": f"Project not found: {project}"})
+
+
+@app.post("/api/forge/{project}/start")
+async def forge_start(project: str):
+    """Start or resume the automated forge pipeline. Returns SSE stream."""
+    if _orchestrator is None or _config is None:
+        return JSONResponse(status_code=503, content={"error": "System not initialized"})
+
+    from src.services.forge import ForgeProject
+
+    fp = ForgeProject(project, _config)
+
+    queue: Queue = Queue()
+
+    def _run_pipeline():
+        """Run the forge pipeline in a thread, pushing events to the queue."""
+        try:
+            # Reinitialize librarian to pick up any new lore files from planning
+            librarian = Librarian(_config)
+            for event in fp.run_pipeline(librarian):
+                queue.put(event)
+        except Exception as e:
+            queue.put({"event": "error", "message": str(e)})
+        finally:
+            queue.put(None)
+
+    loop = asyncio.get_event_loop()
+    loop.run_in_executor(None, _run_pipeline)
+
+    async def event_generator():
+        while True:
+            try:
+                event = await loop.run_in_executor(None, partial(queue.get, timeout=120))
+            except Empty:
+                yield "event: ping\ndata: {}\n\n"
+                continue
+
+            if event is None:
+                break
+
+            event_type = event.pop("event", "progress")
+            yield f"event: {event_type}\ndata: {json.dumps(event)}\n\n"
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+@app.post("/api/forge/{project}/pause")
+async def forge_pause(project: str):
+    """Pause a running forge pipeline."""
+    if _config is None:
+        return JSONResponse(status_code=503, content={"error": "System not initialized"})
+
+    from src.services.forge import ForgeProject
+
+    fp = ForgeProject(project, _config)
+    try:
+        manifest = fp.load()
+        manifest.paused = True
+        fp.manifest = manifest
+        fp._save_manifest()
+        return {"status": "ok", "paused": True}
+    except FileNotFoundError:
+        return JSONResponse(status_code=404, content={"error": f"Project not found: {project}"})
+
+
+@app.post("/api/forge/{project}/approve")
+async def forge_approve(project: str):
+    """Approve chapter 1 and unpause the pipeline."""
+    if _config is None:
+        return JSONResponse(status_code=503, content={"error": "System not initialized"})
+
+    from src.services.forge import ForgeProject
+
+    fp = ForgeProject(project, _config)
+    try:
+        manifest = fp.load()
+        manifest.paused = False
+        fp.manifest = manifest
+        fp._save_manifest()
+        return {"status": "ok", "paused": False, "message": "Pipeline unpaused. Run /forge start to continue."}
+    except FileNotFoundError:
+        return JSONResponse(status_code=404, content={"error": f"Project not found: {project}"})
+
+
+@app.get("/api/forge/{project}/chapter/{num}")
+async def forge_chapter(project: str, num: int):
+    """Read a chapter draft."""
+    if _config is None:
+        return JSONResponse(status_code=503, content={"error": "System not initialized"})
+
+    ch_key = f"ch-{num:02d}"
+    draft_path = _config.paths.forge / project / "chapters" / f"{ch_key}-draft.md"
+
+    if not draft_path.exists():
+        return JSONResponse(status_code=404, content={"error": f"Chapter {num} not found"})
+
+    content = draft_path.read_text(encoding="utf-8")
+    return {"chapter": num, "key": ch_key, "content": content, "word_count": len(content.split())}
 
 
 @app.get("/", response_class=HTMLResponse)

@@ -36,6 +36,7 @@ class Mode(str, Enum):
     GENERAL = "general"
     WRITER = "writer"
     ROLEPLAY = "roleplay"
+    FORGE = "forge"
 
 
 # ── Tool definitions ──────────────────────────────────────────────────
@@ -85,7 +86,7 @@ ORCHESTRATOR_TOOLS = [
                 "path": {"type": "string", "description": "Relative path within the content directory."},
                 "directory": {
                     "type": "string",
-                    "enum": ["lore", "story", "writing", "chats", "code-requests"],
+                    "enum": ["lore", "story", "writing", "chats", "code-requests", "forge"],
                     "description": "Which content directory to read from.",
                 },
             },
@@ -101,7 +102,7 @@ ORCHESTRATOR_TOOLS = [
                 "path": {"type": "string", "description": "Relative path within the content directory."},
                 "directory": {
                     "type": "string",
-                    "enum": ["lore", "story", "writing", "chats", "code-requests"],
+                    "enum": ["lore", "story", "writing", "chats", "code-requests", "forge"],
                     "description": "Which content directory to write to.",
                 },
                 "content": {"type": "string", "description": "File content to write."},
@@ -117,7 +118,7 @@ ORCHESTRATOR_TOOLS = [
             "properties": {
                 "directory": {
                     "type": "string",
-                    "enum": ["lore", "story", "writing", "chats", "code-requests"],
+                    "enum": ["lore", "story", "writing", "chats", "code-requests", "forge"],
                     "description": "Which content directory to list.",
                 },
                 "subdirectory": {
@@ -137,7 +138,7 @@ ORCHESTRATOR_TOOLS = [
                 "query": {"type": "string", "description": "Text to search for (case-insensitive)."},
                 "directory": {
                     "type": "string",
-                    "enum": ["lore", "story", "writing", "chats", "code-requests"],
+                    "enum": ["lore", "story", "writing", "chats", "code-requests", "forge"],
                     "description": "Which content directory to search.",
                 },
             },
@@ -328,6 +329,41 @@ and pace plot progression accordingly. For example, if a plot thread is marked a
 
 {file_context}"""
 
+FORGE_MODE_PROMPT = """## Mode: StoryForge Planning
+
+You are in StoryForge planning mode — helping the user design a long-form story \
+that will be written autonomously by AI agents chapter by chapter.
+
+Current project: {project_name}
+
+Your job is to guide the user through defining everything the story needs. Work \
+through these areas conversationally — ask questions, make suggestions, and \
+refine their ideas:
+
+1. **Premise & hook** — What is this story about? What makes it compelling?
+2. **Main characters** — Who are the protagonists, antagonists, key supporting cast?
+3. **World & setting** — Where and when does this take place? What are the rules?
+4. **Tone & style** — Dark? Funny? Literary? Fast-paced? What POV and tense?
+5. **Structure** — How many chapters? Complete arc (beginning-middle-end) or episodic? Length targets?
+
+When the user gives vague or incomplete answers, CREATE CONCRETE LORE ENTRIES. \
+Use the write_file tool with directory "lore" to write character bios, location \
+descriptions, and world details. For example, if they say "the main character is \
+like a noir detective mixed with a wizard", write a full character bio to \
+lore/characters/<name>.md with physical description, personality, background, \
+motivations, and speech patterns.
+
+Be creative and opinionated when filling in gaps — you are a co-author, not \
+just a transcriber. Make bold, specific choices that serve the story. The user \
+can always adjust.
+
+Also save the evolving premise and structure decisions to the forge project \
+directory using write_file with directory "forge" and path \
+"{project_name}/plan/premise.md". Update this file as decisions are made.
+
+When the user is satisfied with the plan, they can say "proceed" to advance \
+to the automated design phase, or run /forge start {project_name}."""
+
 
 class Orchestrator:
     """Routes user intent. The only agent the user talks to directly."""
@@ -352,6 +388,7 @@ class Orchestrator:
         self.active_file: str | None = None     # e.g. "chapter-03.md"
         self.pending_content: str | None = None  # Writer mode: awaiting accept/reject
         self.last_prompt: str | None = None      # For regenerate
+        self.forge_project: str | None = None    # Active forge project name
 
         log.info(
             "Orchestrator initialized (persona: %d tokens, model: %s)",
@@ -385,6 +422,10 @@ class Orchestrator:
                 project_dir = base_dir / self.active_project
                 project_dir.mkdir(parents=True, exist_ok=True)
 
+        # Track forge project name
+        if mode == Mode.FORGE and project:
+            self.forge_project = project
+
         log.info("Mode set to %s (project=%s, file=%s)", mode, self.active_project, self.active_file)
         return {
             "mode": mode.value,
@@ -398,6 +439,8 @@ class Orchestrator:
             return self.config.paths.writing
         elif self.mode == Mode.ROLEPLAY:
             return self.config.paths.chats
+        elif self.mode == Mode.FORGE:
+            return self.config.paths.forge
         return None
 
     def _active_file_path(self) -> Path | None:
@@ -508,6 +551,16 @@ class Orchestrator:
                 current_file=self.active_file or "(none)",
                 file_context=file_context,
             ))
+
+        elif self.mode == Mode.FORGE:
+            project_name = self.forge_project or "(none)"
+            parts.append(FORGE_MODE_PROMPT.format(project_name=project_name))
+            # Include any existing premise for context
+            if self.forge_project:
+                premise_path = self.config.paths.forge / self.forge_project / "plan" / "premise.md"
+                if premise_path.exists():
+                    premise = premise_path.read_text(encoding="utf-8")
+                    parts.append(f"## Current Premise\n\n{premise}")
 
         # Inject story state if it exists (outside the cached system prompt)
         state_content = self._load_state_summary()
@@ -724,6 +777,16 @@ class Orchestrator:
                     response_type="confirmation",
                 )
 
+        if self.mode == Mode.FORGE:
+            if lower in ("proceed", "start", "go"):
+                return Response(
+                    content=(
+                        f"Planning complete! Run `/forge start {self.forge_project}` "
+                        f"to kick off the automated design and writing pipeline."
+                    ),
+                    response_type="confirmation",
+                )
+
         return None
 
     def _post_generation(self, response_text: str, response_type: str, user_input: str) -> tuple[str, str]:
@@ -878,6 +941,7 @@ class Orchestrator:
             "writing": self.config.paths.writing,
             "chats": self.config.paths.chats,
             "code-requests": self.config.paths.code_requests,
+            "forge": self.config.paths.forge,
         }
 
     def _resolve_path(self, directory: str, relative_path: str) -> Path | None:
