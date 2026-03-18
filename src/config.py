@@ -47,6 +47,8 @@ class PathsConfig(BaseModel):
     writing_styles: Path = Path("./writing-styles")
     portraits: Path = Path("./portraits")
     council: Path = Path("./council")
+    layouts: Path = Path("./layouts")
+    layout_images: Path = Path("./layout-images")
 
 
 class AppConfig(BaseModel):

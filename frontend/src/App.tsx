@@ -3,6 +3,12 @@ import { getMode, getStatus, newSession, sendChatStream, setMode as apiSetMode }
 import type { Message, MessageVariant, Mode, Status } from "./types";
 import { parseCommand, executeCommand } from "./commands";
 import type { CommandContext } from "./commands";
+import * as tts from "./tts";
+import * as layoutManager from "./layout";
+import type { LayoutConfig } from "./layout";
+import * as artifactManager from "./artifacts";
+import type { Artifact } from "./artifacts";
+import LayoutShell from "./components/LayoutShell";
 import HeaderBar from "./components/HeaderBar";
 import MessageBubble from "./components/MessageBubble";
 import InputBar from "./components/InputBar";
@@ -17,6 +23,8 @@ function App() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [status, setStatus] = useState<Status | null>(null);
   const [mode, setMode] = useState<Mode>("general");
+  const [layout, setLayout] = useState<LayoutConfig>(layoutManager.getLayout());
+  const [artifact, setArtifact] = useState<Artifact | null>(null);
   const [hasPending, setHasPending] = useState(false);
   const [sending, setSending] = useState(false);
   const [streamStatus, setStreamStatus] = useState<string | null>(null);
@@ -43,6 +51,11 @@ function App() {
 
   useEffect(() => {
     refreshStatus();
+    tts.init();
+    layoutManager.setOnLayoutChange(setLayout);
+    layoutManager.init();
+    artifactManager.setOnArtifactChange(setArtifact);
+    artifactManager.init();
   }, [refreshStatus]);
 
   useEffect(() => {
@@ -83,6 +96,8 @@ function App() {
     } else {
       setMessages((prev) => [...prev, makeAssistantMsg(content, responseType, portrait)]);
     }
+    // Auto TTS for new assistant messages
+    tts.onAssistantMessage(content);
   }
 
   function makeAssistantMsg(content: string, responseType: string, portrait?: string | null): Message {
@@ -147,6 +162,7 @@ function App() {
       const ctx: CommandContext = {
         status,
         mode,
+        messages,
         openProfile: () => setProfileOpen(true),
         openMode: () => setModeOpen(true),
         openLore: () => setLoreOpen(true),
@@ -289,7 +305,7 @@ function App() {
 
   const hasAssistantMessages = messages.some((m) => m.role === "assistant");
 
-  return (
+  const chatContent = (
     <div className="h-dvh flex flex-col bg-bg">
       <HeaderBar
         status={status}
@@ -318,10 +334,11 @@ function App() {
             </div>
           </div>
         )}
-        {messages.map((msg) => (
+        {messages.map((msg, i) => (
           <MessageBubble
             key={msg.id}
             message={msg}
+            index={i + 1}
             mode={mode}
             onEdit={msg.role === "user" ? handleEditMessage : undefined}
             onSwipe={msg.role === "assistant" ? handleSwipe : undefined}
@@ -383,6 +400,10 @@ function App() {
         onChanged={refreshStatus}
       />
     </div>
+  );
+
+  return (
+    <LayoutShell layout={layout} chatContent={chatContent} artifact={artifact} />
   );
 }
 

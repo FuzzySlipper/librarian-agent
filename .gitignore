@@ -1,5 +1,6 @@
-# Generated images
+# Generated content
 generated-images/
+artifacts/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

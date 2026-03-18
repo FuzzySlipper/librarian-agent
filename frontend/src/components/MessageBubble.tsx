@@ -4,12 +4,13 @@ import type { Message, Mode } from "../types";
 
 interface MessageBubbleProps {
   message: Message;
+  index: number;
   mode?: Mode;
   onEdit?: (id: string, newContent: string) => void;
   onSwipe?: (id: string, direction: "prev" | "next") => void;
 }
 
-export default function MessageBubble({ message, mode, onEdit, onSwipe }: MessageBubbleProps) {
+export default function MessageBubble({ message, index, mode, onEdit, onSwipe }: MessageBubbleProps) {
   const isUser = message.role === "user";
   const isSystem = message.role === "system";
   const isProse = message.responseType === "prose" || message.responseType === "prose_pending";
@@ -61,11 +62,18 @@ export default function MessageBubble({ message, mode, onEdit, onSwipe }: Messag
         if (isUser && onEdit && !editing) setEditing(true);
       }}
     >
-      {!isUser && message.responseType && message.responseType !== "discussion" && (
-        <div className="text-[10px] uppercase tracking-wider text-accent mb-1">
-          {isPending ? "pending review" : message.responseType}
+      <div className="flex items-start justify-between gap-2">
+        <div className="flex-1 min-w-0">
+          {!isUser && message.responseType && message.responseType !== "discussion" && (
+            <div className="text-[10px] uppercase tracking-wider text-accent mb-1">
+              {isPending ? "pending review" : message.responseType}
+            </div>
+          )}
         </div>
-      )}
+        <span className="text-[9px] text-text-muted/40 font-mono shrink-0 select-none leading-none pt-0.5">
+          {index}
+        </span>
+      </div>
 
       {editing ? (
         <div className="flex flex-col gap-2">
@@ -137,7 +145,10 @@ export default function MessageBubble({ message, mode, onEdit, onSwipe }: Messag
   if (isSystem) {
     return (
       <div className="flex justify-center">
-        <div className="max-w-[90%] sm:max-w-[80%] rounded-lg px-4 py-2.5 text-[13px] text-text-muted bg-surface/50 border border-border/50 font-mono">
+        <div className="relative max-w-[90%] sm:max-w-[80%] rounded-lg px-4 py-2.5 text-[13px] text-text-muted bg-surface/50 border border-border/50 font-mono">
+          <span className="absolute top-1 right-2 text-[9px] text-text-muted/30 font-mono select-none">
+            {index}
+          </span>
           <div className="prose prose-invert prose-sm max-w-none [&_p]:mb-1.5 [&_p:last-child]:mb-0 [&_code]:text-accent [&_code]:text-[12px]">
             <ReactMarkdown>{message.content}</ReactMarkdown>
           </div>

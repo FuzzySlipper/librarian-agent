@@ -21,8 +21,14 @@ from src.agents.librarian import Librarian
 from src.agents.orchestrator import Mode, Orchestrator
 from src.agents.prose_writer import ProseWriter
 from src.config import AppConfig, load_config, list_profiles
+from src.services.artifacts import (
+    build_artifact_prompt, get_current as get_current_artifact,
+    set_current as set_current_artifact, clear_current as clear_current_artifact,
+    list_artifacts, FORMAT_INSTRUCTIONS,
+)
 from src.services.council import run_council, format_council_for_orchestrator
 from src.services.imagegen import generate_image
+from src.services.tts import generate_speech, get_provider_list as get_tts_providers
 
 log = logging.getLogger(__name__)
 
@@ -55,6 +61,12 @@ async def lifespan(app: FastAPI):
     gen_images_dir.mkdir(exist_ok=True)
     app.mount("/generated-images", StaticFiles(directory=str(gen_images_dir)), name="generated-images")
     log.info("Generated images directory mounted: %s", gen_images_dir)
+
+    # Mount layout-images directory for layout background images
+    layout_images_dir = Path(_config.paths.layout_images)
+    if layout_images_dir.is_dir():
+        app.mount("/layout-images", StaticFiles(directory=str(layout_images_dir)), name="layout-images")
+        log.info("Layout images directory mounted: %s", layout_images_dir)
 
     log.info("Agents initialized, server ready")
     yield
@@ -421,6 +433,140 @@ async def write_lore(file_path: str, request: LoreWriteRequest):
     return {"status": "ok", "path": file_path, "tokens": len(request.content) // 4}
 
 
+# ── Layout endpoints ──────────────────────────────────────────────────
+
+
+@app.get("/api/layouts")
+async def list_layouts():
+    """List available layout configs."""
+    if _config is None:
+        return JSONResponse(status_code=503, content={"error": "System not initialized"})
+
+    layouts_dir = Path(_config.paths.layouts)
+    if not layouts_dir.is_dir():
+        return {"layouts": []}
+
+    names = sorted(p.stem for p in layouts_dir.glob("*.md"))
+    return {"layouts": names}
+
+
+@app.get("/api/layouts/{name}")
+async def get_layout(name: str):
+    """Get a layout config by name. Returns the raw MD content."""
+    if _config is None:
+        return JSONResponse(status_code=503, content={"error": "System not initialized"})
+
+    layouts_dir = Path(_config.paths.layouts)
+    path = (layouts_dir / f"{name}.md").resolve()
+
+    # Prevent path traversal
+    try:
+        path.relative_to(layouts_dir.resolve())
+    except ValueError:
+        return JSONResponse(status_code=403, content={"error": "Invalid path"})
+
+    if not path.exists():
+        return JSONResponse(status_code=404, content={"error": f"Layout '{name}' not found"})
+
+    return {"name": name, "content": path.read_text(encoding="utf-8")}
+
+
+# ── Artifact endpoints ────────────────────────────────────────────────
+
+
+class ArtifactRequest(BaseModel):
+    prompt: str
+    format: str = "prose"
+
+
+@app.post("/api/artifact")
+async def generate_artifact(request: ArtifactRequest):
+    """Generate an in-world artifact via the orchestrator. SSE stream."""
+    if _orchestrator is None:
+        return JSONResponse(status_code=503, content={"error": "System not initialized"})
+
+    artifact_prompt = build_artifact_prompt(request.prompt, request.format)
+    queue: Queue = Queue()
+
+    def _run():
+        try:
+            queue.put({"event": "status", "message": f"Generating {request.format} artifact..."})
+            final_content = ""
+            for event in _orchestrator.handle_stream(artifact_prompt):
+                if event.get("event") == "done":
+                    final_content = event.get("content", "")
+                    # Store the artifact
+                    set_current_artifact({
+                        "content": final_content,
+                        "format": request.format,
+                        "prompt": request.prompt,
+                    })
+                    # Override the event to mark as artifact
+                    event["response_type"] = "artifact"
+                queue.put(event)
+        except Exception as e:
+            queue.put({"event": "error", "message": str(e)})
+        finally:
+            queue.put(None)
+
+    loop = asyncio.get_event_loop()
+    loop.run_in_executor(None, _run)
+
+    async def event_generator():
+        while True:
+            try:
+                event = await loop.run_in_executor(None, partial(queue.get, timeout=120))
+            except Empty:
+                yield "event: ping\ndata: {}\n\n"
+                continue
+
+            if event is None:
+                break
+
+            event_type = event.pop("event", "status")
+            if event_type == "done":
+                event["portrait"] = _get_current_portrait()
+            yield f"event: {event_type}\ndata: {json.dumps(event)}\n\n"
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+@app.get("/api/artifact/current")
+async def current_artifact():
+    """Get the current artifact for panel display."""
+    artifact = get_current_artifact()
+    if artifact is None:
+        return {"artifact": None}
+    return {"artifact": artifact}
+
+
+@app.post("/api/artifact/clear")
+async def clear_artifact():
+    """Clear the current artifact from the panel."""
+    clear_current_artifact()
+    return {"status": "ok"}
+
+
+@app.get("/api/artifact/formats")
+async def artifact_formats():
+    """List available artifact format types."""
+    return {"formats": list(FORMAT_INSTRUCTIONS.keys())}
+
+
+@app.get("/api/artifact/history")
+async def artifact_history():
+    """List saved artifacts."""
+    return {"artifacts": list_artifacts()}
+
+
 # ── Council endpoint ──────────────────────────────────────────────────
 
 
@@ -516,6 +662,43 @@ async def imagine(request: ImageRequest):
             status_code=501,
             content={"status": "not_configured", "error": result.error, "prompt": result.prompt},
         )
+
+
+# ── TTS endpoints ─────────────────────────────────────────────────────
+
+
+class TTSRequest(BaseModel):
+    text: str
+
+
+@app.post("/api/tts")
+async def tts(request: TTSRequest):
+    """Generate speech audio from text. Returns audio stream."""
+    loop = asyncio.get_event_loop()
+    result = await loop.run_in_executor(None, partial(generate_speech, request.text))
+
+    if result.success and result.audio_data:
+        from fastapi.responses import Response as RawResponse
+        return RawResponse(
+            content=result.audio_data,
+            media_type=result.content_type,
+        )
+    else:
+        return JSONResponse(
+            status_code=501 if "not configured" in (result.error or "").lower() or "No server" in (result.error or "") else 502,
+            content={"error": result.error or "TTS generation failed"},
+        )
+
+
+@app.get("/api/tts/providers")
+async def tts_providers():
+    """List configured TTS providers (so frontend knows if browser-only or server-backed)."""
+    providers = get_tts_providers()
+    return {
+        "providers": providers,
+        "has_browser": "browser" in providers,
+        "has_server": any(p != "browser" for p in providers),
+    }
 
 
 @app.get("/", response_class=HTMLResponse)

@@ -1,0 +1,15 @@
+columns: 100%
+
+[center]
+type: chat
+
+[style]
+--color-bg: #1a1a2e
+--color-surface: #16213e
+--color-surface-alt: #0f3460
+--color-text: #e0e0e0
+--color-text-muted: #888888
+--color-accent: #e94560
+--color-accent-hover: #ff6b81
+--color-input-bg: #222244
+--color-border: #333355
