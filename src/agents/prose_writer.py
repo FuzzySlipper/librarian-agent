@@ -59,11 +59,11 @@ Your job is to write scenes based on the user's description. Follow these rules:
 class ProseWriter:
     """Generates scenes, calling the Librarian automatically via tool use."""
 
-    def __init__(self, librarian: Librarian, config: AppConfig):
+    def __init__(self, librarian: Librarian, config: AppConfig, client=None, model: str | None = None):
         self.librarian = librarian
         self.config = config
-        self.model = config.models.prose_writer
-        self.client = anthropic.Anthropic()
+        self.model = model or config.models.prose_writer
+        self.client = client or anthropic.Anthropic()
         self.writing_style = self._load_writing_style()
 
     def _load_writing_style(self) -> str:

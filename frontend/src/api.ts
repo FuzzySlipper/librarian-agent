@@ -196,3 +196,116 @@ export async function writeLore(path: string, content: string): Promise<unknown>
     body: JSON.stringify({ content }),
   });
 }
+
+// ── Persona / prompt files ──
+
+export interface PersonaFileInfo {
+  path: string;
+  tokens: number;
+  size: number;
+}
+
+export async function listPersona(): Promise<{ files: PersonaFileInfo[]; persona_path: string }> {
+  return request("/api/persona");
+}
+
+export async function readPersona(path: string): Promise<{ path: string; content: string; tokens: number }> {
+  return request(`/api/persona/${encodeURIComponent(path)}`);
+}
+
+export async function writePersona(path: string, content: string): Promise<unknown> {
+  return request(`/api/persona/${encodeURIComponent(path)}`, {
+    method: "PUT",
+    body: JSON.stringify({ content }),
+  });
+}
+
+// ── Provider management ──
+
+export interface ProviderInfo {
+  alias: string;
+  name: string;
+  type: string;
+  base_url: string | null;
+  selected_model: string;
+  api_key_set: boolean;
+  used_by?: string[];
+}
+
+export async function listProviders(): Promise<{ providers: ProviderInfo[] }> {
+  return request("/api/providers");
+}
+
+export async function createProvider(provider: {
+  alias: string;
+  name: string;
+  type: string;
+  base_url?: string | null;
+  api_key?: string;
+  selected_model: string;
+}): Promise<unknown> {
+  return request("/api/providers", {
+    method: "POST",
+    body: JSON.stringify(provider),
+  });
+}
+
+export async function updateProvider(
+  alias: string,
+  provider: {
+    name?: string;
+    type?: string;
+    base_url?: string | null;
+    api_key?: string;
+    selected_model?: string;
+  },
+): Promise<unknown> {
+  return request(`/api/providers/${encodeURIComponent(alias)}`, {
+    method: "PUT",
+    body: JSON.stringify(provider),
+  });
+}
+
+export async function deleteProvider(alias: string): Promise<unknown> {
+  return request(`/api/providers/${encodeURIComponent(alias)}`, {
+    method: "DELETE",
+  });
+}
+
+export async function fetchProviderModels(alias: string): Promise<{ models: string[] }> {
+  return request(`/api/providers/${encodeURIComponent(alias)}/models`, {
+    method: "POST",
+  });
+}
+
+export async function fetchModelsForNew(provider: {
+  type: string;
+  base_url?: string | null;
+  api_key?: string;
+}): Promise<{ models: string[] }> {
+  return request("/api/providers/fetch-models", {
+    method: "POST",
+    body: JSON.stringify(provider),
+  });
+}
+
+// ── Agent model assignments ──
+
+export interface AgentAssignments {
+  orchestrator: string;
+  prose_writer: string;
+  librarian: string;
+}
+
+export async function getAgentModels(): Promise<{ assignments: AgentAssignments }> {
+  return request("/api/agents/models");
+}
+
+export async function updateAgentModels(
+  updates: Partial<AgentAssignments>,
+): Promise<{ status: string; assignments: AgentAssignments }> {
+  return request("/api/agents/models", {
+    method: "PUT",
+    body: JSON.stringify(updates),
+  });
+}

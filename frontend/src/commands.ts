@@ -78,14 +78,14 @@ const commands: Record<string, CommandDef> = {
 
   mode: {
     description: "Switch operating mode",
-    usage: "[general|writer|roleplay]",
+    usage: "[general|writer|roleplay|council]",
     handler: async (args, ctx) => {
       const target = args.trim().toLowerCase();
       if (!target) {
         ctx.openMode();
         return { output: null };
       }
-      const valid: Mode[] = ["general", "writer", "roleplay"];
+      const valid: Mode[] = ["general", "writer", "roleplay", "council"];
       if (!valid.includes(target as Mode)) {
         return { output: `Unknown mode \`${target}\`. Valid modes: ${valid.join(", ")}` };
       }

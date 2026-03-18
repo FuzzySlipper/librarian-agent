@@ -49,19 +49,20 @@ class ForgeConfig(BaseModel):
 
 
 class PathsConfig(BaseModel):
-    lore: Path = Path("./lore")
+    lore: Path = Path("./defaults/lore")
     story: Path = Path("./story")
     writing: Path = Path("./writing")
     chats: Path = Path("./chats")
     code_requests: Path = Path("./code-requests")
-    persona: Path = Path("./persona")
-    writing_styles: Path = Path("./writing-styles")
+    persona: Path = Path("./defaults/persona")
+    writing_styles: Path = Path("./defaults/writing-styles")
     portraits: Path = Path("./portraits")
-    council: Path = Path("./council")
-    layouts: Path = Path("./layouts")
-    layout_images: Path = Path("./layout-images")
+    council: Path = Path("./defaults/council")
+    layouts: Path = Path("./defaults/layouts")
+    layout_images: Path = Path("./defaults/layout-images")
     forge: Path = Path("./forge")
-    forge_prompts: Path = Path("./forge-prompts")
+    forge_prompts: Path = Path("./defaults/forge-prompts")
+    data: Path = Path("./data")
 
 
 class AppConfig(BaseModel):

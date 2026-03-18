@@ -7,10 +7,11 @@ interface MessageBubbleProps {
   index: number;
   mode?: Mode;
   onEdit?: (id: string, newContent: string) => void;
+  onRetry?: (id: string) => void;
   onSwipe?: (id: string, direction: "prev" | "next") => void;
 }
 
-export default function MessageBubble({ message, index, mode, onEdit, onSwipe }: MessageBubbleProps) {
+export default function MessageBubble({ message, index, mode, onEdit, onRetry, onSwipe }: MessageBubbleProps) {
   const isUser = message.role === "user";
   const isSystem = message.role === "system";
   const isProse = message.responseType === "prose" || message.responseType === "prose_pending";
@@ -59,7 +60,7 @@ export default function MessageBubble({ message, index, mode, onEdit, onSwipe }:
           : `bg-surface rounded-bl-sm ${isProse ? "border-l-3 border-accent" : ""} ${isPending ? "ring-1 ring-accent/40" : ""}`
       } ${showPortrait ? "max-w-none sm:max-w-none" : ""}`}
       onClick={() => {
-        if (isUser && onEdit && !editing) setEditing(true);
+        if (!isSystem && onEdit && !editing) setEditing(true);
       }}
     >
       <div className="flex items-start justify-between gap-2">
@@ -101,6 +102,14 @@ export default function MessageBubble({ message, index, mode, onEdit, onSwipe }:
             >
               Save
             </button>
+            {onRetry && (
+              <button
+                onClick={() => { handleSave(); onRetry(message.id); }}
+                className="text-xs bg-accent/70 hover:bg-accent text-white rounded px-3 py-1"
+              >
+                Retry
+              </button>
+            )}
           </div>
         </div>
       ) : (
@@ -131,7 +140,7 @@ export default function MessageBubble({ message, index, mode, onEdit, onSwipe }:
             </div>
           )}
 
-          {isUser && onEdit && (
+          {!isSystem && onEdit && (
             <div className="text-[10px] text-text-muted mt-1 opacity-0 group-hover:opacity-100 transition-opacity">
               click to edit
             </div>

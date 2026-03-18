@@ -1,4 +1,4 @@
-export type Mode = "general" | "writer" | "roleplay" | "forge";
+export type Mode = "general" | "writer" | "roleplay" | "forge" | "council";
 
 export interface MessageVariant {
   content: string;

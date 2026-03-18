@@ -15,8 +15,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy application code
 COPY src/ src/
 COPY config.yaml .
-COPY persona/ persona/
-COPY writing-styles/ writing-styles/
+
+# Copy default content
+COPY defaults/ defaults/
 
 # Copy built frontend
 COPY --from=frontend /frontend/dist static/

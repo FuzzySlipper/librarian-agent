@@ -18,6 +18,18 @@ import ContextOverlay from "./components/ContextOverlay";
 import WriterControls from "./components/WriterControls";
 import RoleplayControls from "./components/RoleplayControls";
 import LoreBrowser from "./components/LoreBrowser";
+import PromptBrowser from "./components/PromptBrowser";
+import LayoutPicker from "./components/LayoutPicker";
+import ProviderManager from "./components/ProviderManager";
+
+/** uuid() requires a secure context (HTTPS); fall back for plain HTTP. */
+const uuid = (): string =>
+  typeof crypto.randomUUID === "function"
+    ? crypto.randomUUID()
+    : "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (c) => {
+        const r = (Math.random() * 16) | 0;
+        return (c === "x" ? r : (r & 0x3) | 0x8).toString(16);
+      });
 
 function App() {
   const [messages, setMessages] = useState<Message[]>([]);
@@ -32,6 +44,9 @@ function App() {
   const [modeOpen, setModeOpen] = useState(false);
   const [contextOpen, setContextOpen] = useState(false);
   const [loreOpen, setLoreOpen] = useState(false);
+  const [promptsOpen, setPromptsOpen] = useState(false);
+  const [layoutOpen, setLayoutOpen] = useState(false);
+  const [providerOpen, setProviderOpen] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   // When true, the next response will be added as a variant to the last assistant message
@@ -102,7 +117,7 @@ function App() {
 
   function makeAssistantMsg(content: string, responseType: string, portrait?: string | null): Message {
     return {
-      id: crypto.randomUUID(),
+      id: uuid(),
       role: "assistant",
       content,
       responseType,
@@ -235,7 +250,7 @@ function App() {
 
     // Normal LLM message
     const userMsg: Message = {
-      id: crypto.randomUUID(),
+      id: uuid(),
       role: "user",
       content: text,
       timestamp: Date.now(),
@@ -247,7 +262,7 @@ function App() {
 
   function addSystemMessage(content: string) {
     const msg: Message = {
-      id: crypto.randomUUID(),
+      id: uuid(),
       role: "system",
       content,
       timestamp: Date.now(),
@@ -263,6 +278,33 @@ function App() {
     setMessages((prev) =>
       prev.map((m) => (m.id === id ? { ...m, content: newContent } : m)),
     );
+  }
+
+  async function handleRetry(id: string) {
+    // Find the message being retried
+    const idx = messages.findIndex((m) => m.id === id);
+    if (idx === -1) return;
+
+    const msg = messages[idx];
+
+    if (msg.role === "user") {
+      // Retrying a user message: trim everything after it and re-send
+      setMessages((prev) => prev.slice(0, idx + 1));
+      addAsVariantRef.current = false;
+      await doSend(msg.content);
+    } else if (msg.role === "assistant") {
+      // Retrying from an assistant message: find the user message before it,
+      // trim from the assistant message onward, and re-send
+      let userIdx = -1;
+      for (let i = idx - 1; i >= 0; i--) {
+        if (messages[i].role === "user") { userIdx = i; break; }
+      }
+      if (userIdx === -1) return;
+      const userContent = messages[userIdx].content;
+      setMessages((prev) => prev.slice(0, userIdx + 1));
+      addAsVariantRef.current = false;
+      await doSend(userContent);
+    }
   }
 
   function handleSwipe(id: string, direction: "prev" | "next") {
@@ -309,10 +351,14 @@ function App() {
     <div className="h-dvh flex flex-col bg-bg">
       <HeaderBar
         status={status}
+        layoutName={layout.name}
         onOpenProfile={() => setProfileOpen(true)}
         onOpenMode={() => setModeOpen(true)}
         onOpenContext={() => setContextOpen(true)}
         onOpenLore={() => setLoreOpen(true)}
+        onOpenPrompts={() => setPromptsOpen(true)}
+        onOpenLayout={() => setLayoutOpen(true)}
+        onOpenProviders={() => setProviderOpen(true)}
         onNewSession={async () => {
           await newSession();
           setMessages([]);
@@ -340,7 +386,8 @@ function App() {
             message={msg}
             index={i + 1}
             mode={mode}
-            onEdit={msg.role === "user" ? handleEditMessage : undefined}
+            onEdit={msg.role !== "system" ? handleEditMessage : undefined}
+            onRetry={msg.role !== "system" ? handleRetry : undefined}
             onSwipe={msg.role === "assistant" ? handleSwipe : undefined}
           />
         ))}
@@ -397,6 +444,20 @@ function App() {
       <LoreBrowser
         open={loreOpen}
         onClose={() => setLoreOpen(false)}
+        onChanged={refreshStatus}
+      />
+      <PromptBrowser
+        open={promptsOpen}
+        onClose={() => setPromptsOpen(false)}
+        onChanged={refreshStatus}
+      />
+      <LayoutPicker
+        open={layoutOpen}
+        onClose={() => setLayoutOpen(false)}
+      />
+      <ProviderManager
+        open={providerOpen}
+        onClose={() => setProviderOpen(false)}
         onChanged={refreshStatus}
       />
     </div>

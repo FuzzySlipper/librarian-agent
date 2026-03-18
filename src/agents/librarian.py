@@ -52,10 +52,10 @@ LORE CORPUS:
 class Librarian:
     """Loads lore files once, answers queries from cached content."""
 
-    def __init__(self, config: AppConfig):
+    def __init__(self, config: AppConfig, client=None, model: str | None = None):
         self.config = config
-        self.model = config.models.librarian
-        self.client = anthropic.Anthropic()
+        self.model = model or config.models.librarian
+        self.client = client or anthropic.Anthropic()
         self.lore_path = config.active_lore_path
         self.lore = load_lore_files(self.lore_path)
         self.system_prompt = self._build_system_prompt()

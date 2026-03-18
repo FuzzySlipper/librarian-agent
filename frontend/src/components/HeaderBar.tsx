@@ -2,14 +2,18 @@ import type { Status } from "../types";
 
 interface HeaderBarProps {
   status: Status | null;
+  layoutName: string;
   onOpenProfile: () => void;
   onOpenMode: () => void;
   onOpenContext: () => void;
   onOpenLore: () => void;
+  onOpenPrompts: () => void;
+  onOpenLayout: () => void;
+  onOpenProviders: () => void;
   onNewSession: () => void;
 }
 
-export default function HeaderBar({ status, onOpenProfile, onOpenMode, onOpenContext, onOpenLore, onNewSession }: HeaderBarProps) {
+export default function HeaderBar({ status, layoutName, onOpenProfile, onOpenMode, onOpenContext, onOpenLore, onOpenPrompts, onOpenLayout, onOpenProviders, onNewSession }: HeaderBarProps) {
   const ready = status?.status === "ready";
 
   return (
@@ -50,6 +54,27 @@ export default function HeaderBar({ status, onOpenProfile, onOpenMode, onOpenCon
               title="Context usage"
             >
               ctx
+            </button>
+            <button
+              onClick={onOpenPrompts}
+              className="text-xs px-2 py-1 rounded-md bg-surface-alt text-text-muted hover:text-text transition-colors"
+              title="Browse persona prompts"
+            >
+              prompts
+            </button>
+            <button
+              onClick={onOpenLayout}
+              className="text-xs px-2 py-1 rounded-md bg-surface-alt text-text-muted hover:text-text transition-colors"
+              title="Switch layout"
+            >
+              {layoutName}
+            </button>
+            <button
+              onClick={onOpenProviders}
+              className="text-xs px-2 py-1 rounded-md bg-surface-alt text-text-muted hover:text-text transition-colors"
+              title="Configure AI providers"
+            >
+              {status.model.split("-").slice(0, 2).join("-")}
             </button>
             <button
               onClick={onOpenProfile}

@@ -133,6 +133,7 @@ def run_planner(
     prompts_dir: Path,
     model: str,
     stats_callback: Callable | None = None,
+    client=None,
 ) -> Generator[dict, None, None]:
     """Run the planner agent tool-use loop.
 
@@ -150,7 +151,7 @@ def run_planner(
         "then character bios, then chapter briefs."
     )
 
-    client = anthropic.Anthropic()
+    client = client or anthropic.Anthropic()
     messages: list[dict] = [{"role": "user", "content": user_prompt}]
 
     while True:

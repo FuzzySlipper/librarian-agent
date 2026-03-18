@@ -23,11 +23,15 @@ writing_style:
   active: default            # Filename (without .md) in paths.writing_styles
 
 paths:
-  lore: ./lore
+  lore: ./defaults/lore
   story: ./story
   writing: ./writing
   chats: ./chats
   code_requests: ./code-requests
-  persona: ./persona
-  writing_styles: ./writing-styles
+  persona: ./defaults/persona
+  writing_styles: ./defaults/writing-styles
+  council: ./defaults/council
+  layouts: ./defaults/layouts
+  layout_images: ./defaults/layout-images
+  forge_prompts: ./defaults/forge-prompts
   portraits: ./portraits

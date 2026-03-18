@@ -7,6 +7,7 @@ Sync SDK calls run in a thread pool to avoid blocking the event loop (ADR-008).
 import asyncio
 import json
 import logging
+import os
 from contextlib import asynccontextmanager
 from functools import partial
 from pathlib import Path
@@ -29,26 +30,30 @@ from src.services.artifacts import (
 from src.services.council import run_council, format_council_for_orchestrator
 from src.services.imagegen import generate_image
 from src.services.tts import generate_speech, get_provider_list as get_tts_providers
+from src.providers import ProviderRegistry
 
 log = logging.getLogger(__name__)
 
 # Global references set during lifespan
 _orchestrator: Orchestrator | None = None
 _config: AppConfig | None = None
+_registry: ProviderRegistry | None = None
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Initialize agents on startup."""
-    global _orchestrator, _config
+    global _orchestrator, _config, _registry
 
     config_path = Path(app.state.config_path) if hasattr(app.state, "config_path") else Path("config.yaml")
     env_path = Path(app.state.env_path) if hasattr(app.state, "env_path") else None
 
     _config = load_config(config_path=config_path, env_path=env_path)
-    librarian = Librarian(_config)
-    writer = ProseWriter(librarian, _config)
-    _orchestrator = Orchestrator(librarian, writer, _config)
+    _registry = ProviderRegistry(Path(_config.paths.data))
+
+    librarian = _create_agent_with_registry(Librarian, _config, _config.models.librarian)
+    writer = _create_writer_with_registry(librarian, _config)
+    _orchestrator = _create_orchestrator_with_registry(librarian, writer, _config)
 
     # Mount portraits directory for serving images
     portraits_dir = Path(_config.paths.portraits)
@@ -193,6 +198,14 @@ async def status():
     if _orchestrator is None or _config is None:
         return {"status": "initializing"}
 
+    # Resolve alias to actual model name if using provider registry
+    model_display = _config.models.orchestrator
+    if _registry:
+        try:
+            model_display = _registry.get_model(_config.models.orchestrator)
+        except Exception:
+            pass  # Fall back to alias/raw model name
+
     return {
         "status": "ready",
         "mode": _orchestrator.mode.value,
@@ -202,7 +215,7 @@ async def status():
         "lore_set": _config.lore.active or "(default)",
         "persona": _config.persona.active or "(default)",
         "writing_style": _config.writing_style.active,
-        "model": _config.models.orchestrator,
+        "model": model_display,
         "conversation_turns": len(_orchestrator.conversation_history) // 2,
     }
 
@@ -259,12 +272,41 @@ async def switch_profile(request: ProfileRequest):
     }
 
 
+def _create_agent_with_registry(agent_cls, config, model_alias):
+    """Create an agent, resolving model alias through the registry."""
+    if _registry and model_alias in _registry.providers:
+        client = _registry.get_client(model_alias)
+        model = _registry.get_model(model_alias)
+        return agent_cls(config, client=client, model=model)
+    return agent_cls(config)
+
+
+def _create_writer_with_registry(librarian, config):
+    """Create ProseWriter with registry-resolved client."""
+    alias = config.models.prose_writer
+    if _registry and alias in _registry.providers:
+        client = _registry.get_client(alias)
+        model = _registry.get_model(alias)
+        return ProseWriter(librarian, config, client=client, model=model)
+    return ProseWriter(librarian, config)
+
+
+def _create_orchestrator_with_registry(librarian, writer, config):
+    """Create Orchestrator with registry-resolved client."""
+    alias = config.models.orchestrator
+    if _registry and alias in _registry.providers:
+        client = _registry.get_client(alias)
+        model = _registry.get_model(alias)
+        return Orchestrator(librarian, writer, config, client=client, model=model)
+    return Orchestrator(librarian, writer, config)
+
+
 def _reinitialize_agents():
     """Rebuild the agent chain with current config. Runs in thread pool."""
     global _orchestrator
-    librarian = Librarian(_config)
-    writer = ProseWriter(librarian, _config)
-    _orchestrator = Orchestrator(librarian, writer, _config)
+    librarian = _create_agent_with_registry(Librarian, _config, _config.models.librarian)
+    writer = _create_writer_with_registry(librarian, _config)
+    _orchestrator = _create_orchestrator_with_registry(librarian, writer, _config)
     log.info(
         "Agents reinitialized: persona=%s, lore=%s",
         _config.persona.active or "(default)",
@@ -288,7 +330,7 @@ async def set_mode(request: ModeRequest):
         mode = Mode(request.mode)
     except ValueError:
         return JSONResponse(status_code=400, content={
-            "error": f"Invalid mode: {request.mode}. Must be general, writer, or roleplay."
+            "error": f"Invalid mode: {request.mode}. Must be general, writer, roleplay, forge, or council."
         })
 
     result = _orchestrator.set_mode(mode, project=request.project, file=request.file)
@@ -433,6 +475,83 @@ async def write_lore(file_path: str, request: LoreWriteRequest):
     return {"status": "ok", "path": file_path, "tokens": len(request.content) // 4}
 
 
+# ── Persona / prompt endpoints ────────────────────────────────────────
+
+
+@app.get("/api/persona")
+async def list_persona():
+    """List all persona prompt files with token estimates."""
+    if _config is None:
+        return JSONResponse(status_code=503, content={"error": "System not initialized"})
+
+    persona_path = Path(_config.paths.persona)
+    if not persona_path.exists():
+        return {"files": [], "persona_path": str(persona_path)}
+
+    files = []
+    for p in sorted(persona_path.rglob("*.md")):
+        rel = str(p.relative_to(persona_path))
+        try:
+            content = p.read_text(encoding="utf-8")
+            tokens = len(content) // 4
+        except Exception:
+            content = ""
+            tokens = 0
+        files.append({"path": rel, "tokens": tokens, "size": len(content)})
+
+    return {"files": files, "persona_path": str(persona_path)}
+
+
+@app.get("/api/persona/{file_path:path}")
+async def read_persona(file_path: str):
+    """Read a single persona file."""
+    if _config is None:
+        return JSONResponse(status_code=503, content={"error": "System not initialized"})
+
+    persona_path = Path(_config.paths.persona)
+    resolved = (persona_path / file_path).resolve()
+
+    try:
+        resolved.relative_to(persona_path.resolve())
+    except ValueError:
+        return JSONResponse(status_code=403, content={"error": "Invalid path"})
+
+    if not resolved.exists():
+        return JSONResponse(status_code=404, content={"error": "File not found"})
+
+    content = resolved.read_text(encoding="utf-8")
+    return {"path": file_path, "content": content, "tokens": len(content) // 4}
+
+
+class PersonaWriteRequest(BaseModel):
+    content: str
+
+
+@app.put("/api/persona/{file_path:path}")
+async def write_persona(file_path: str, request: PersonaWriteRequest):
+    """Write a persona file. Reinitializes agents to pick up changes."""
+    global _orchestrator
+
+    if _config is None:
+        return JSONResponse(status_code=503, content={"error": "System not initialized"})
+
+    persona_path = Path(_config.paths.persona)
+    resolved = (persona_path / file_path).resolve()
+
+    try:
+        resolved.relative_to(persona_path.resolve())
+    except ValueError:
+        return JSONResponse(status_code=403, content={"error": "Invalid path"})
+
+    resolved.parent.mkdir(parents=True, exist_ok=True)
+    resolved.write_text(request.content, encoding="utf-8")
+
+    loop = asyncio.get_event_loop()
+    await loop.run_in_executor(None, _reinitialize_agents)
+
+    return {"status": "ok", "path": file_path, "tokens": len(request.content) // 4}
+
+
 # ── Layout endpoints ──────────────────────────────────────────────────
 
 
@@ -469,6 +588,230 @@ async def get_layout(name: str):
         return JSONResponse(status_code=404, content={"error": f"Layout '{name}' not found"})
 
     return {"name": name, "content": path.read_text(encoding="utf-8")}
+
+
+# ── Provider endpoints ────────────────────────────────────────────────
+
+
+@app.get("/api/providers")
+async def list_providers():
+    """List configured providers (keys masked), with agent assignments."""
+    if _registry is None:
+        return JSONResponse(status_code=503, content={"error": "System not initialized"})
+
+    # Build alias → agent names mapping from config
+    assignments: dict[str, list[str]] = {}
+    if _config:
+        for agent_name, alias in [
+            ("orchestrator", _config.models.orchestrator),
+            ("prose_writer", _config.models.prose_writer),
+            ("librarian", _config.models.librarian),
+        ]:
+            assignments.setdefault(alias, []).append(agent_name)
+
+    providers = _registry.list_providers()
+    for p in providers:
+        p["used_by"] = assignments.get(p["alias"], [])
+
+    return {"providers": providers}
+
+
+class ProviderCreateRequest(BaseModel):
+    alias: str
+    name: str
+    type: str
+    base_url: str | None = None
+    api_key: str | None = None
+    selected_model: str = ""
+
+
+@app.post("/api/providers")
+async def create_provider(request: ProviderCreateRequest):
+    """Create a new provider config."""
+    if _registry is None:
+        return JSONResponse(status_code=503, content={"error": "System not initialized"})
+    try:
+        _registry.add(
+            alias=request.alias,
+            name=request.name,
+            ptype=request.type,
+            base_url=request.base_url,
+            api_key=request.api_key,
+            selected_model=request.selected_model,
+        )
+
+        # Reinitialize agents so they pick up new provider
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(None, _reinitialize_agents)
+
+        return {"status": "ok"}
+    except ValueError as e:
+        return JSONResponse(status_code=409, content={"error": str(e)})
+
+
+class ProviderUpdateRequest(BaseModel):
+    name: str | None = None
+    type: str | None = None
+    base_url: str | None = None
+    api_key: str | None = None
+    selected_model: str | None = None
+
+
+@app.put("/api/providers/{alias}")
+async def update_provider(alias: str, request: ProviderUpdateRequest):
+    """Update a provider config."""
+    if _registry is None:
+        return JSONResponse(status_code=503, content={"error": "System not initialized"})
+    try:
+        updates = {k: v for k, v in request.model_dump().items() if v is not None}
+        _registry.update(alias, **updates)
+
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(None, _reinitialize_agents)
+
+        return {"status": "ok"}
+    except KeyError as e:
+        return JSONResponse(status_code=404, content={"error": str(e)})
+
+
+@app.delete("/api/providers/{alias}")
+async def delete_provider(alias: str):
+    """Remove a provider config."""
+    if _registry is None:
+        return JSONResponse(status_code=503, content={"error": "System not initialized"})
+    try:
+        _registry.remove(alias)
+        return {"status": "ok"}
+    except KeyError as e:
+        return JSONResponse(status_code=404, content={"error": str(e)})
+
+
+@app.post("/api/providers/{alias}/models")
+async def fetch_provider_models(alias: str):
+    """Fetch available models from a configured provider."""
+    if _registry is None:
+        return JSONResponse(status_code=503, content={"error": "System not initialized"})
+    try:
+        loop = asyncio.get_event_loop()
+        models = await loop.run_in_executor(None, _registry.fetch_models, alias)
+        return {"models": models}
+    except KeyError as e:
+        return JSONResponse(status_code=404, content={"error": str(e)})
+    except Exception as e:
+        return JSONResponse(status_code=502, content={"error": f"Failed to fetch models: {e}"})
+
+
+class FetchModelsRequest(BaseModel):
+    type: str
+    base_url: str | None = None
+    api_key: str | None = None
+
+
+@app.post("/api/providers/fetch-models")
+async def fetch_models_adhoc(request: FetchModelsRequest):
+    """Fetch models without a saved provider (for the new-provider form)."""
+    if _registry is None:
+        return JSONResponse(status_code=503, content={"error": "System not initialized"})
+    try:
+        loop = asyncio.get_event_loop()
+        models = await loop.run_in_executor(
+            None, _registry.fetch_models_adhoc, request.type, request.api_key, request.base_url,
+        )
+        return {"models": models}
+    except Exception as e:
+        return JSONResponse(status_code=502, content={"error": f"Failed to fetch models: {e}"})
+
+
+@app.get("/api/providers/templates")
+async def provider_templates():
+    """Return built-in provider templates for the UI."""
+    return {
+        "templates": [
+            {"name": "Anthropic", "type": "anthropic", "base_url": None},
+            {"name": "OpenAI", "type": "openai", "base_url": "https://api.openai.com/v1"},
+            {"name": "Custom (OpenAI-compatible)", "type": "openai", "base_url": ""},
+        ]
+    }
+
+
+# ── Agent model assignment endpoints ──────────────────────────────────
+
+
+@app.get("/api/agents/models")
+async def get_agent_models():
+    """Return current agent-to-provider alias mapping."""
+    if _config is None:
+        return JSONResponse(status_code=503, content={"error": "System not initialized"})
+    return {
+        "assignments": {
+            "orchestrator": _config.models.orchestrator,
+            "prose_writer": _config.models.prose_writer,
+            "librarian": _config.models.librarian,
+        },
+    }
+
+
+class AgentModelUpdate(BaseModel):
+    orchestrator: str | None = None
+    prose_writer: str | None = None
+    librarian: str | None = None
+
+
+@app.put("/api/agents/models")
+async def update_agent_models(request: AgentModelUpdate):
+    """Update agent-to-provider alias mapping and persist to config.yaml."""
+    if _config is None:
+        return JSONResponse(status_code=503, content={"error": "System not initialized"})
+
+    changed = False
+    if request.orchestrator is not None and request.orchestrator != _config.models.orchestrator:
+        _config.models.orchestrator = request.orchestrator
+        changed = True
+    if request.prose_writer is not None and request.prose_writer != _config.models.prose_writer:
+        _config.models.prose_writer = request.prose_writer
+        changed = True
+    if request.librarian is not None and request.librarian != _config.models.librarian:
+        _config.models.librarian = request.librarian
+        changed = True
+
+    if changed:
+        # Persist to config.yaml
+        config_path = Path(os.environ.get("CONFIG_PATH", "config.yaml"))
+        _save_config_yaml(config_path, _config)
+
+        # Reinitialize agents with new assignments
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(None, _reinitialize_agents)
+
+    return {
+        "status": "ok",
+        "assignments": {
+            "orchestrator": _config.models.orchestrator,
+            "prose_writer": _config.models.prose_writer,
+            "librarian": _config.models.librarian,
+        },
+    }
+
+
+def _save_config_yaml(config_path: Path, config: AppConfig):
+    """Write current config back to config.yaml, preserving structure."""
+    import yaml
+
+    # Read existing file to preserve comments and ordering
+    if config_path.exists():
+        with open(config_path) as f:
+            raw = yaml.safe_load(f) or {}
+    else:
+        raw = {}
+
+    # Update models section
+    raw.setdefault("models", {})
+    raw["models"]["orchestrator"] = config.models.orchestrator
+    raw["models"]["prose_writer"] = config.models.prose_writer
+    raw["models"]["librarian"] = config.models.librarian
+
+    with open(config_path, "w") as f:
+        yaml.dump(raw, f, default_flow_style=False, sort_keys=False)
 
 
 # ── Artifact endpoints ────────────────────────────────────────────────

@@ -37,6 +37,7 @@ class Mode(str, Enum):
     WRITER = "writer"
     ROLEPLAY = "roleplay"
     FORGE = "forge"
+    COUNCIL = "council"
 
 
 # ── Tool definitions ──────────────────────────────────────────────────
@@ -365,6 +366,26 @@ When the user is satisfied with the plan, they can say "proceed" to advance \
 to the automated design phase, or run /forge start {project_name}."""
 
 
+COUNCIL_MODE_PROMPT = """## Mode: Council
+
+You are in council mode. Every message the user sends is automatically routed \
+through a council of AI perspectives before reaching you. You will receive the \
+council members' responses and must synthesize them into a coherent, helpful answer.
+
+When you receive council responses:
+1. Identify points of **agreement** across members
+2. Note any **disagreements** or alternative perspectives
+3. Highlight **unique insights** from individual members
+4. Provide your **synthesis** — the best answer drawing from all perspectives
+5. Be transparent about where council members disagreed
+
+If the council members have no relevant expertise on the topic, say so and \
+provide your own best answer instead of pretending the council was helpful.
+
+Maintain your persona and voice while synthesizing — you are the narrator \
+presenting the council's wisdom, not a neutral aggregator."""
+
+
 class Orchestrator:
     """Routes user intent. The only agent the user talks to directly."""
 
@@ -373,12 +394,14 @@ class Orchestrator:
         librarian: Librarian,
         writer: ProseWriter,
         config: AppConfig,
+        client=None,
+        model: str | None = None,
     ):
         self.librarian = librarian
         self.writer = writer
         self.config = config
-        self.model = config.models.orchestrator
-        self.client = anthropic.Anthropic()
+        self.model = model or config.models.orchestrator
+        self.client = client or anthropic.Anthropic()
         self.persona = self._load_persona()
         self.conversation_history: list[dict] = []
 
@@ -562,6 +585,9 @@ class Orchestrator:
                     premise = premise_path.read_text(encoding="utf-8")
                     parts.append(f"## Current Premise\n\n{premise}")
 
+        elif self.mode == Mode.COUNCIL:
+            parts.append(COUNCIL_MODE_PROMPT)
+
         # Inject story state if it exists (outside the cached system prompt)
         state_content = self._load_state_summary()
         if state_content:
@@ -657,6 +683,11 @@ class Orchestrator:
             yield {"event": "done", "content": intercepted.content, "response_type": intercepted.response_type}
             return
 
+        # Council mode: gather perspectives first, then synthesize
+        if self.mode == Mode.COUNCIL:
+            yield from self._handle_council_stream(user_input)
+            return
+
         yield {"event": "status", "message": "Building prompt..."}
 
         system_prompt = self._build_system_prompt()
@@ -725,6 +756,77 @@ class Orchestrator:
             break
 
         response_text, response_type = self._post_generation(response_text, response_type, user_input)
+        self.conversation_history.append({"role": "assistant", "content": response_text})
+        self._log_response(user_input, response_text, response_type)
+
+        yield {"event": "done", "content": response_text, "response_type": response_type}
+
+    def _handle_council_stream(self, user_input: str):
+        """Council mode: gather perspectives, then synthesize via normal LLM loop."""
+        from src.services.council import run_council, format_council_for_orchestrator
+
+        yield {"event": "status", "message": "Gathering council perspectives..."}
+
+        council_dir = self.config.paths.council
+        result = run_council(user_input, council_dir)
+
+        member_count = len(result.get("members", []))
+        error_count = sum(1 for m in result.get("members", []) if m.get("error"))
+        yield {"event": "status", "message": f"Council: {member_count - error_count} responded, synthesizing..."}
+
+        # Format council responses into a prompt for synthesis
+        formatted = format_council_for_orchestrator(result)
+
+        # Now run the normal LLM loop with the council's input
+        yield {"event": "status", "message": "Building prompt..."}
+
+        system_prompt = self._build_system_prompt()
+        self.conversation_history.append({"role": "user", "content": user_input})
+        # Use the formatted council output as the actual message to synthesize
+        messages = list(self.conversation_history[:-1]) + [
+            {"role": "user", "content": formatted},
+        ]
+
+        response_text = ""
+        response_type = "council"
+        loop_count = 0
+
+        while True:
+            loop_count += 1
+            yield {"event": "status", "message": f"Synthesizing... (step {loop_count})"}
+
+            response = self.client.messages.create(
+                model=self.model,
+                max_tokens=4096,
+                system=system_prompt,
+                messages=messages,
+                tools=ORCHESTRATOR_TOOLS,
+            )
+
+            if response.stop_reason == "end_turn":
+                response_text = self._extract_text(response)
+                break
+
+            if response.stop_reason == "tool_use":
+                messages.append({"role": "assistant", "content": response.content})
+                tool_results = []
+                for block in response.content:
+                    if block.type == "tool_use":
+                        yield {"event": "tool", "name": block.name, "input": block.input}
+                        result_text, rtype = self._execute_tool(block.name, block.input)
+                        if rtype:
+                            response_type = rtype
+                        tool_results.append({
+                            "type": "tool_result",
+                            "tool_use_id": block.id,
+                            "content": result_text,
+                        })
+                messages.append({"role": "user", "content": tool_results})
+                continue
+
+            response_text = self._extract_text(response)
+            break
+
         self.conversation_history.append({"role": "assistant", "content": response_text})
         self._log_response(user_input, response_text, response_type)
 

@@ -2,6 +2,9 @@
 generated-images/
 artifacts/
 
+# Runtime data (encrypted keys, model cache)
+data/
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
@@ -216,7 +219,8 @@ __marimo__/
 # Frontend build artifacts and dependencies
 frontend/node_modules/
 frontend/dist/
-static/
+# Note: static/ is tracked — it contains the pre-built frontend
+# so users don't need Node.js. Rebuild with: ./start.sh --build-frontend
 
 # Reference repos (cloned for analysis, not part of this project)
 reference/
