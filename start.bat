@@ -2,7 +2,7 @@
 setlocal
 
 :: Narrative Orchestration System — Launch Script (Windows)
-:: Usage: start.bat [--update] [--build-frontend]
+:: Usage: start.bat [--update] [--build-frontend] [--setup]
 
 cd /d "%~dp0"
 
@@ -10,14 +10,18 @@ set PORT=8005
 set HOST=0.0.0.0
 set VENV_DIR=.venv
 set STATIC_DIR=static
+set BUILD_DIR=build
+set DEV_DIR=dev
 
 :: Parse arguments
 set DO_UPDATE=0
 set BUILD_FRONTEND=0
+set FORCE_SETUP=0
 :parse_args
 if "%~1"=="" goto :done_args
 if "%~1"=="--update" set DO_UPDATE=1
 if "%~1"=="--build-frontend" set BUILD_FRONTEND=1
+if "%~1"=="--setup" set FORCE_SETUP=1
 if "%~1"=="--help" goto :show_help
 if "%~1"=="-h" goto :show_help
 shift
@@ -29,6 +33,7 @@ echo.
 echo Options:
 echo   --update           Pull latest code and update dependencies
 echo   --build-frontend   Rebuild frontend (requires Node.js)
+echo   --setup            Force re-run setup (won't overwrite your data)
 echo   -h, --help         Show this help
 exit /b 0
 
@@ -41,6 +46,26 @@ if %DO_UPDATE%==1 (
         echo Git pull failed. Resolve conflicts and retry.
         exit /b 1
     )
+)
+
+:: Build directory setup
+set NEEDS_SETUP=0
+
+if not exist "%BUILD_DIR%" set NEEDS_SETUP=1
+if not exist "%BUILD_DIR%\.setup-version" set NEEDS_SETUP=1
+if %FORCE_SETUP%==1 set NEEDS_SETUP=1
+
+:: Check version stamp
+if %NEEDS_SETUP%==0 (
+    fc /b "%DEV_DIR%\VERSION" "%BUILD_DIR%\.setup-version" >nul 2>&1
+    if errorlevel 1 (
+        echo New version detected — running setup to apply updates...
+        set NEEDS_SETUP=1
+    )
+)
+
+if %NEEDS_SETUP%==1 (
+    call "%DEV_DIR%\setup.bat"
 )
 
 :: Python virtual environment
@@ -57,29 +82,18 @@ call %VENV_DIR%\Scripts\activate.bat
 
 echo Installing Python dependencies...
 where uv >nul 2>&1 && (
-    uv pip install -r requirements.txt --quiet
+    uv pip install -r %DEV_DIR%\requirements.txt --quiet
 ) || (
-    pip install -r requirements.txt --quiet
-)
-
-:: .env setup
-if not exist .env (
-    if exist .env.example (
-        echo.
-        echo No .env file found. Creating from .env.example...
-        echo Edit .env to add your API key, or configure providers in the UI.
-        copy .env.example .env >nul
-        echo.
-    )
+    pip install -r %DEV_DIR%\requirements.txt --quiet
 )
 
 :: Frontend build (optional)
 if %BUILD_FRONTEND%==1 (
     where npm >nul 2>&1 && (
         echo Building frontend...
-        cd frontend && npm install && npm run build && cd ..
+        cd %DEV_DIR%\frontend && npm install && npm run build && cd ..\..
         if exist "%STATIC_DIR%" rmdir /s /q "%STATIC_DIR%"
-        xcopy /e /i /q frontend\dist "%STATIC_DIR%"
+        xcopy /e /i /q %DEV_DIR%\frontend\dist "%STATIC_DIR%"
         echo Frontend built.
     ) || (
         echo Warning: npm not found. Cannot build frontend.
@@ -93,16 +107,10 @@ if not exist "%STATIC_DIR%" (
     echo.
 )
 
-:: Create runtime directories
-if not exist data mkdir data
-if not exist story mkdir story
-if not exist writing mkdir writing
-if not exist chats mkdir chats
-if not exist code-requests mkdir code-requests
-if not exist forge mkdir forge
-if not exist generated-images mkdir generated-images
-
 :: Launch server
+set CONFIG_PATH=%BUILD_DIR%\config.yaml
+set DOTENV_PATH=%BUILD_DIR%\.env
+
 echo.
 echo Starting server on http://localhost:%PORT%
 echo Press Ctrl+C to stop.

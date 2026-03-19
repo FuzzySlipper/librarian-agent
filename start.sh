@@ -11,22 +11,27 @@ PORT="${PORT:-8005}"
 HOST="${HOST:-0.0.0.0}"
 VENV_DIR=".venv"
 STATIC_DIR="static"
+BUILD_DIR="build"
+DEV_DIR="dev"
 
 # Parse arguments
 DO_UPDATE=false
 BUILD_FRONTEND=false
+FORCE_SETUP=false
 for arg in "$@"; do
     case "$arg" in
-        --update)       DO_UPDATE=true ;;
+        --update)         DO_UPDATE=true ;;
         --build-frontend) BUILD_FRONTEND=true ;;
-        --port=*)       PORT="${arg#*=}" ;;
-        --port)         shift; PORT="${1:-8005}" ;;
+        --setup)          FORCE_SETUP=true ;;
+        --port=*)         PORT="${arg#*=}" ;;
+        --port)           shift; PORT="${1:-8005}" ;;
         --help|-h)
             echo "Usage: ./start.sh [OPTIONS]"
             echo ""
             echo "Options:"
             echo "  --update           Pull latest code and update dependencies"
             echo "  --build-frontend   Rebuild frontend (requires Node.js)"
+            echo "  --setup            Force re-run setup (won't overwrite your data)"
             echo "  --port=PORT        Set server port (default: 8005)"
             echo "  -h, --help         Show this help"
             echo ""
@@ -38,7 +43,7 @@ for arg in "$@"; do
     esac
 done
 
-# ── Git update ───────────────────────────────────────────────────────
+# ── Git update ───────────────────────────────────────────────────
 if $DO_UPDATE; then
     echo "Pulling latest changes..."
     git pull --ff-only || {
@@ -47,7 +52,27 @@ if $DO_UPDATE; then
     }
 fi
 
-# ── Python virtual environment ───────────────────────────────────────
+# ── Build directory setup ────────────────────────────────────────
+NEEDS_SETUP=false
+
+if [ ! -d "$BUILD_DIR" ]; then
+    NEEDS_SETUP=true
+elif [ ! -f "$BUILD_DIR/.setup-version" ]; then
+    NEEDS_SETUP=true
+elif ! diff -q "$DEV_DIR/VERSION" "$BUILD_DIR/.setup-version" &>/dev/null; then
+    echo "New version detected — running setup to apply updates..."
+    NEEDS_SETUP=true
+fi
+
+if $FORCE_SETUP; then
+    NEEDS_SETUP=true
+fi
+
+if $NEEDS_SETUP; then
+    bash "$DEV_DIR/setup.sh"
+fi
+
+# ── Python virtual environment ───────────────────────────────────
 if [ ! -d "$VENV_DIR" ]; then
     echo "Creating Python virtual environment..."
     if command -v uv &>/dev/null; then
@@ -58,34 +83,21 @@ if [ ! -d "$VENV_DIR" ]; then
 fi
 
 PYTHON="$VENV_DIR/bin/python"
-PIP="$VENV_DIR/bin/pip"
 
 echo "Installing Python dependencies..."
 if command -v uv &>/dev/null; then
-    uv pip install --python "$PYTHON" -r requirements.txt --quiet
+    uv pip install --python "$PYTHON" -r "$DEV_DIR/requirements.txt" --quiet
 else
-    "$PIP" install -r requirements.txt --quiet
+    "$VENV_DIR/bin/pip" install -r "$DEV_DIR/requirements.txt" --quiet
 fi
 
-# ── .env setup ───────────────────────────────────────────────────────
-if [ ! -f .env ]; then
-    if [ -f .env.example ]; then
-        echo ""
-        echo "No .env file found. Creating from .env.example..."
-        echo "Edit .env to add your API key, or configure providers in the UI."
-        cp .env.example .env
-        echo ""
-    fi
-fi
-
-# ── Frontend build (optional) ───────────────────────────────────────
+# ── Frontend build (optional) ───────────────────────────────────
 if $BUILD_FRONTEND; then
     if command -v npm &>/dev/null; then
         echo "Building frontend..."
-        (cd frontend && npm install && npm run build)
-        # Copy build output to static/ for the server
+        (cd "$DEV_DIR/frontend" && npm install && npm run build)
         rm -rf "$STATIC_DIR"
-        cp -r frontend/dist "$STATIC_DIR"
+        cp -r "$DEV_DIR/frontend/dist" "$STATIC_DIR"
         echo "Frontend built to $STATIC_DIR/"
     else
         echo "Warning: npm not found. Cannot build frontend."
@@ -101,10 +113,10 @@ if [ ! -d "$STATIC_DIR" ]; then
     echo ""
 fi
 
-# ── Create runtime directories ───────────────────────────────────────
-mkdir -p data story writing chats code-requests forge generated-images
+# ── Launch server ────────────────────────────────────────────────
+export CONFIG_PATH="$BUILD_DIR/config.yaml"
+export DOTENV_PATH="$BUILD_DIR/.env"
 
-# ── Launch server ────────────────────────────────────────────────────
 echo ""
 echo "Starting server on http://localhost:${PORT}"
 echo "Press Ctrl+C to stop."

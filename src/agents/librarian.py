@@ -146,7 +146,7 @@ def main() -> None:
 
     parser = argparse.ArgumentParser(description="Query the Librarian")
     parser.add_argument("--query", "-q", type=str, help="Lore query to run")
-    parser.add_argument("--config", type=Path, default=Path("config.yaml"), help="Config file path")
+    parser.add_argument("--config", type=Path, default=Path("build/config.yaml"), help="Config file path")
     parser.add_argument("--env", type=Path, default=None, help="Path to .env file")
     parser.add_argument("--summary", action="store_true", help="Print lore summary and exit")
     parser.add_argument("--interactive", "-i", action="store_true", help="Interactive query mode")

@@ -1,0 +1,16 @@
+services:
+  narrator:
+    build:
+      context: ../..
+      dockerfile: dev/docker/Dockerfile
+    ports:
+      - "8005:8005"
+    env_file:
+      - ../../build/.env
+    volumes:
+      - ../../build:/app/build
+      - ../../docs/code-requests:/app/docs/code-requests
+    environment:
+      - CONFIG_PATH=/app/build/config.yaml
+      - DOTENV_PATH=/app/build/.env
+    restart: unless-stopped

@@ -76,6 +76,17 @@ export default function MessageBubble({ message, index, mode, onEdit, onRetry, o
         </span>
       </div>
 
+      {!isUser && message.reasoning && (
+        <details className="mb-2">
+          <summary className="text-[11px] text-text-muted cursor-pointer hover:text-text select-none">
+            reasoning
+          </summary>
+          <div className="mt-1 px-3 py-2 rounded-lg bg-surface-alt/50 border border-border/30 text-[13px] text-text-muted leading-relaxed max-h-60 overflow-y-auto">
+            <pre className="whitespace-pre-wrap font-sans">{message.reasoning}</pre>
+          </div>
+        </details>
+      )}
+
       {editing ? (
         <div className="flex flex-col gap-2">
           <textarea

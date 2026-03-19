@@ -21,7 +21,7 @@ def main() -> None:
     )
 
     parser = argparse.ArgumentParser(description="Narrative Orchestration System")
-    parser.add_argument("--config", type=Path, default=Path("config.yaml"))
+    parser.add_argument("--config", type=Path, default=Path("build/config.yaml"))
     parser.add_argument("--env", type=Path, default=None)
     parser.add_argument("--cli", action="store_true", help="Run in CLI mode")
     parser.add_argument(

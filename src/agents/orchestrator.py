@@ -27,6 +27,7 @@ from src.agents.librarian import Librarian
 from src.agents.prose_writer import ProseWriter, _load_story_context
 from src.config import AppConfig
 from src.models import Response
+from src.openai_adapter import OpenAIAdapter
 from src.utils.file_utils import estimate_tokens
 
 log = logging.getLogger(__name__)
@@ -669,13 +670,45 @@ class Orchestrator:
             response_type=response_type,
         )
 
+    def _call_llm_streaming(self, system_prompt, messages, tools=None):
+        """Call the LLM with streaming, yielding text/reasoning deltas and a final response.
+
+        Yields dicts:
+          {"type": "text_delta", "text": "..."}
+          {"type": "reasoning_delta", "text": "..."}
+          {"type": "done", "response": <AnthropicLikeResponse or anthropic.Message>}
+        """
+        if isinstance(self.client, OpenAIAdapter):
+            yield from self.client.messages.create_stream(
+                model=self.model,
+                max_tokens=4096,
+                system=system_prompt,
+                messages=messages,
+                tools=tools,
+            )
+        else:
+            # Native Anthropic streaming
+            with self.client.messages.stream(
+                model=self.model,
+                max_tokens=4096,
+                system=system_prompt,
+                messages=messages,
+                tools=tools or [],
+            ) as stream:
+                for text in stream.text_stream:
+                    yield {"type": "text_delta", "text": text}
+                response = stream.get_final_message()
+            yield {"type": "done", "response": response}
+
     def handle_stream(self, user_input: str):
         """Process user input, yielding progress events as dicts.
 
         Yields dicts with 'event' key:
           - {"event": "status", "message": "..."}     — progress update
           - {"event": "tool", "name": "...", "input": {...}}  — tool being called
-          - {"event": "done", "content": "...", "response_type": "..."}  — final result
+          - {"event": "text_delta", "text": "..."}    — partial text chunk
+          - {"event": "reasoning_delta", "text": "..."}  — partial reasoning chunk
+          - {"event": "done", "content": "...", "response_type": "...", "reasoning": "..."}  — final result
         """
         # Handle mode-specific commands before the LLM
         intercepted = self._handle_mode_commands(user_input)
@@ -695,6 +728,7 @@ class Orchestrator:
         messages = list(self.conversation_history)
 
         response_text = ""
+        reasoning_text = ""
         response_type = "discussion"
         loop_count = 0
 
@@ -702,13 +736,22 @@ class Orchestrator:
             loop_count += 1
             yield {"event": "status", "message": f"Thinking... (step {loop_count})"}
 
-            response = self.client.messages.create(
-                model=self.model,
-                max_tokens=4096,
-                system=system_prompt,
-                messages=messages,
-                tools=ORCHESTRATOR_TOOLS,
-            )
+            response = None
+            for chunk in self._call_llm_streaming(system_prompt, messages, ORCHESTRATOR_TOOLS):
+                if chunk["type"] == "text_delta":
+                    yield {"event": "text_delta", "text": chunk["text"]}
+                elif chunk["type"] == "reasoning_delta":
+                    yield {"event": "reasoning_delta", "text": chunk["text"]}
+                elif chunk["type"] == "done":
+                    response = chunk["response"]
+
+            if response is None:
+                log.error("Streaming completed without final response")
+                break
+
+            # Collect reasoning from response
+            if hasattr(response, "reasoning") and response.reasoning:
+                reasoning_text = response.reasoning
 
             if response.stop_reason == "end_turn":
                 response_text = self._extract_text(response)
@@ -759,7 +802,10 @@ class Orchestrator:
         self.conversation_history.append({"role": "assistant", "content": response_text})
         self._log_response(user_input, response_text, response_type)
 
-        yield {"event": "done", "content": response_text, "response_type": response_type}
+        done_event = {"event": "done", "content": response_text, "response_type": response_type}
+        if reasoning_text:
+            done_event["reasoning"] = reasoning_text
+        yield done_event
 
     def _handle_council_stream(self, user_input: str):
         """Council mode: gather perspectives, then synthesize via normal LLM loop."""
@@ -788,6 +834,7 @@ class Orchestrator:
         ]
 
         response_text = ""
+        reasoning_text = ""
         response_type = "council"
         loop_count = 0
 
@@ -795,13 +842,20 @@ class Orchestrator:
             loop_count += 1
             yield {"event": "status", "message": f"Synthesizing... (step {loop_count})"}
 
-            response = self.client.messages.create(
-                model=self.model,
-                max_tokens=4096,
-                system=system_prompt,
-                messages=messages,
-                tools=ORCHESTRATOR_TOOLS,
-            )
+            response = None
+            for chunk in self._call_llm_streaming(system_prompt, messages, ORCHESTRATOR_TOOLS):
+                if chunk["type"] == "text_delta":
+                    yield {"event": "text_delta", "text": chunk["text"]}
+                elif chunk["type"] == "reasoning_delta":
+                    yield {"event": "reasoning_delta", "text": chunk["text"]}
+                elif chunk["type"] == "done":
+                    response = chunk["response"]
+
+            if response is None:
+                break
+
+            if hasattr(response, "reasoning") and response.reasoning:
+                reasoning_text = response.reasoning
 
             if response.stop_reason == "end_turn":
                 response_text = self._extract_text(response)
@@ -830,7 +884,10 @@ class Orchestrator:
         self.conversation_history.append({"role": "assistant", "content": response_text})
         self._log_response(user_input, response_text, response_type)
 
-        yield {"event": "done", "content": response_text, "response_type": response_type}
+        done_event = {"event": "done", "content": response_text, "response_type": response_type}
+        if reasoning_text:
+            done_event["reasoning"] = reasoning_text
+        yield done_event
 
     # ── Mode-specific command interception ────────────────────────────
 

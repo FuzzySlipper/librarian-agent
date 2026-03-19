@@ -49,24 +49,25 @@ class ForgeConfig(BaseModel):
 
 
 class PathsConfig(BaseModel):
-    lore: Path = Path("./defaults/lore")
-    story: Path = Path("./story")
-    writing: Path = Path("./writing")
-    chats: Path = Path("./chats")
-    code_requests: Path = Path("./code-requests")
-    persona: Path = Path("./defaults/persona")
-    writing_styles: Path = Path("./defaults/writing-styles")
-    portraits: Path = Path("./portraits")
-    council: Path = Path("./defaults/council")
-    layouts: Path = Path("./defaults/layouts")
-    layout_images: Path = Path("./defaults/layout-images")
-    forge: Path = Path("./forge")
-    forge_prompts: Path = Path("./defaults/forge-prompts")
-    data: Path = Path("./data")
+    lore: Path = Path("./build/lore")
+    story: Path = Path("./build/story")
+    writing: Path = Path("./build/writing")
+    chats: Path = Path("./build/chats")
+    code_requests: Path = Path("./docs/code-requests")
+    persona: Path = Path("./build/persona")
+    writing_styles: Path = Path("./build/writing-styles")
+    portraits: Path = Path("./build/portraits")
+    council: Path = Path("./build/council")
+    layouts: Path = Path("./build/layouts")
+    layout_images: Path = Path("./build/layout-images")
+    forge: Path = Path("./build/forge")
+    forge_prompts: Path = Path("./build/forge-prompts")
+    data: Path = Path("./build/data")
 
 
 class AppConfig(BaseModel):
     provider: Literal["anthropic"] = "anthropic"
+    user_agent: str = "NarrativeOrchestrator/1.0"
     models: ModelsConfig = Field(default_factory=ModelsConfig)
     librarian: LibrarianConfig = Field(default_factory=LibrarianConfig)
     prose_writer: ProseWriterConfig = Field(default_factory=ProseWriterConfig)
@@ -101,15 +102,17 @@ def load_config(
     env_path: Path | None = None,
 ) -> AppConfig:
     """Load config from YAML file and environment variables."""
-    # Load .env if provided or look in standard locations
+    # Load .env — DOTENV_PATH env var > explicit arg > default search
     if env_path and env_path.exists():
         load_dotenv(env_path)
+    elif os.environ.get("DOTENV_PATH"):
+        load_dotenv(os.environ["DOTENV_PATH"])
     else:
         load_dotenv()  # Searches current dir and parents
 
     # Load YAML config — CONFIG_PATH env var takes precedence (used in Docker)
     if config_path is None:
-        config_path = Path(os.environ.get("CONFIG_PATH", "config.yaml"))
+        config_path = Path(os.environ.get("CONFIG_PATH", "build/config.yaml"))
 
     if config_path.exists():
         with open(config_path) as f:

@@ -31,7 +31,7 @@ export async function sendChat(
 }
 
 export interface StreamEvent {
-  type: "status" | "tool" | "done" | "error";
+  type: "status" | "tool" | "done" | "error" | "text_delta" | "reasoning_delta";
   data: Record<string, unknown>;
 }
 
@@ -227,9 +227,11 @@ export interface ProviderInfo {
   name: string;
   type: string;
   base_url: string | null;
+  models_url: string | null;
   selected_model: string;
   api_key_set: boolean;
   used_by?: string[];
+  options?: Record<string, unknown> | null;
 }
 
 export async function listProviders(): Promise<{ providers: ProviderInfo[] }> {
@@ -241,8 +243,10 @@ export async function createProvider(provider: {
   name: string;
   type: string;
   base_url?: string | null;
+  models_url?: string | null;
   api_key?: string;
   selected_model: string;
+  options?: Record<string, unknown>;
 }): Promise<unknown> {
   return request("/api/providers", {
     method: "POST",
@@ -256,6 +260,7 @@ export async function updateProvider(
     name?: string;
     type?: string;
     base_url?: string | null;
+    models_url?: string | null;
     api_key?: string;
     selected_model?: string;
   },
@@ -281,6 +286,7 @@ export async function fetchProviderModels(alias: string): Promise<{ models: stri
 export async function fetchModelsForNew(provider: {
   type: string;
   base_url?: string | null;
+  models_url?: string | null;
   api_key?: string;
 }): Promise<{ models: string[] }> {
   return request("/api/providers/fetch-models", {

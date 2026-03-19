@@ -3,8 +3,8 @@
 This document encodes architectural decisions and constraints for AI coding assistants working on the Narrative Orchestration System. Read this before writing any code.
 
 **Before starting work:**
-- Read `DECISIONS.md` for architectural rationale (numbered ADRs)
-- Read `TASKS.md` for current work items and implementation notes
+- Read `docs/DECISIONS.md` for architectural rationale (numbered ADRs)
+- Read `docs/TASKS.md` for current work items and implementation notes
 - Update both files as decisions are made or tasks progress
 
 ## Project Overview
@@ -45,17 +45,19 @@ No ORMs, no vector databases, no message queues. Filesystem is the database.
 **Two-layer separation:**
 
 ```
-GitHub (public)              Local (never committed)
+GitHub (tracked)             Local (gitignored build/)
 ─────────────────            ──────────────────────────────
-/src                         ~/Documents/narrative-content/
-  agents/                      .env  (API keys)
-  web/                         lore/
-  config.yaml                    characters/
-  docker-compose.yaml            locations/
-  Dockerfile                     factions/
-  requirements.txt             story/
-  .gitignore                     current-draft.md
-                               code-requests/
+src/                         build/
+  agents/                      config.yaml
+  web/                         .env  (API keys)
+dev/                           lore/
+  defaults/                    persona/
+  docker/                      story/
+  requirements.txt             data/
+  setup.sh                     ...
+docs/
+  code-requests/             docs/code-requests/ is tracked
+start.sh / start.bat         (shared via git)
 ```
 
 - **Content directories** mounted via Docker volumes
@@ -204,7 +206,7 @@ src/
 
 ## Configuration
 
-`config.yaml` (committed, no secrets):
+`build/config.yaml` (gitignored, user-editable):
 
 ```yaml
 provider: anthropic
@@ -214,49 +216,19 @@ models:
   prose_writer: <best-prose-model>   # Best prose quality
   orchestrator: <best-prose-model>   # Consistent personality
 
-librarian:
-  max_tokens_per_query: 1024
-
-prose_writer:
-  max_tokens_per_scene: 4096
-  auto_append_to_story: true
-
-persona:
-  max_tokens: 2000               # Token budget for personality content
-
 paths:
-  lore: /app/lore                # In-container paths
-  story: /app/story
-  code_requests: /app/code-requests
+  lore: ./build/lore
+  story: ./build/story
+  code_requests: ./docs/code-requests
 ```
 
-`.env` (never committed, mounted at runtime):
+`build/.env` (gitignored):
 
 ```bash
 ANTHROPIC_API_KEY=sk-ant-...
 ```
 
-## Docker Constraints
-
-```yaml
-services:
-  narrator:
-    build: .
-    ports:
-      - "8005:8005"
-    env_file:
-      - ~/Documents/narrative-content/.env
-    volumes:
-      - ~/Documents/narrative-content/lore:/app/lore:ro
-      - ~/Documents/narrative-content/story:/app/story
-      - ~/Documents/narrative-content/code-requests:/app/code-requests
-    environment:
-      - CONFIG_PATH=/app/config.yaml
-```
-
-- Container has no secrets at build time
-- Lore is read-only (`:ro`)
-- Story and code-requests are read-write
+The `build/` directory is created by `dev/setup.sh` on first run. It copies defaults from `dev/defaults/` and is the user's personal data directory to back up.
 
 ## Common Pitfalls
 
@@ -282,13 +254,13 @@ services:
 
 The users of this system are non-technical. If a user reports a problem:
 
-1. Run `python tools/site_report.py --issue "what the user described"`
+1. Run `python dev/tools/site_report.py --issue "what the user described"`
 2. Read the generated report — it captures system state, project state, content state, and recent logs
 3. If you can diagnose and fix the issue, do so
 4. If you can't, tell the user to send the report file to Patch (the remote developer)
-5. You can also write a code change request to `code-requests/` if the fix requires code changes you're unsure about
+5. You can also write a code change request to `docs/code-requests/` if the fix requires code changes you're unsure about
 
-Reports land in `code-requests/` by default so they're visible to the developer on next review.
+Reports land in `docs/code-requests/` by default so they're visible to the developer on next review.
 
 ## When to Escalate
 
@@ -299,4 +271,4 @@ If the coding agent is unsure about:
 - Orchestrator persona definition
 - Content policy implications of provider choices
 
-These are **creative/product decisions**, not technical. Check `DECISIONS.md` first — the answer may already be recorded.
+These are **creative/product decisions**, not technical. Check `docs/DECISIONS.md` first — the answer may already be recorded.

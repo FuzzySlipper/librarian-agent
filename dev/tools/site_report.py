@@ -107,8 +107,9 @@ def get_project_status(project_dir: Path) -> dict:
 
     # Check for key files
     key_files = [
-        "config.yaml", "requirements.txt", ".env", "Dockerfile",
-        "docker-compose.yaml", "src/main.py", "src/agents/librarian.py",
+        "build/config.yaml", "dev/requirements.txt", "build/.env",
+        "dev/docker/Dockerfile", "dev/docker/docker-compose.yaml",
+        "src/main.py", "src/agents/librarian.py",
         "src/agents/orchestrator.py", "src/web/server.py",
     ]
     info["files_present"] = {f: (project_dir / f).exists() for f in key_files}

@@ -204,7 +204,7 @@ def main() -> None:
 
     parser = argparse.ArgumentParser(description="Generate prose scenes")
     parser.add_argument("--scene", "-s", type=str, help="Scene description to write")
-    parser.add_argument("--config", type=Path, default=Path("config.yaml"))
+    parser.add_argument("--config", type=Path, default=Path("build/config.yaml"))
     parser.add_argument("--env", type=Path, default=None)
     parser.add_argument("--no-append", action="store_true", help="Don't append to story file")
     parser.add_argument("--interactive", "-i", action="store_true", help="Interactive mode")

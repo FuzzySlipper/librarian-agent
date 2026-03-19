@@ -45,11 +45,11 @@ async def lifespan(app: FastAPI):
     """Initialize agents on startup."""
     global _orchestrator, _config, _registry
 
-    config_path = Path(app.state.config_path) if hasattr(app.state, "config_path") else Path("config.yaml")
+    config_path = Path(app.state.config_path) if hasattr(app.state, "config_path") else Path(os.environ.get("CONFIG_PATH", "build/config.yaml"))
     env_path = Path(app.state.env_path) if hasattr(app.state, "env_path") else None
 
     _config = load_config(config_path=config_path, env_path=env_path)
-    _registry = ProviderRegistry(Path(_config.paths.data))
+    _registry = ProviderRegistry(Path(_config.paths.data), user_agent=_config.user_agent)
 
     librarian = _create_agent_with_registry(Librarian, _config, _config.models.librarian)
     writer = _create_writer_with_registry(librarian, _config)
@@ -142,9 +142,11 @@ async def chat_stream(request: ChatRequest):
     """SSE endpoint for streaming chat progress events.
 
     Events:
-      - event: status, data: {"message": "..."}
-      - event: tool,   data: {"name": "...", "input": {...}}
-      - event: done,   data: {"content": "...", "response_type": "..."}
+      - event: status,          data: {"message": "..."}
+      - event: tool,            data: {"name": "...", "input": {...}}
+      - event: text_delta,      data: {"text": "..."}   — partial text chunk
+      - event: reasoning_delta, data: {"text": "..."}   — partial reasoning chunk
+      - event: done,            data: {"content": "...", "response_type": "...", "reasoning": "..."}
     """
     if _orchestrator is None:
         return JSONResponse(status_code=503, content={"error": "System not initialized"})
@@ -621,8 +623,10 @@ class ProviderCreateRequest(BaseModel):
     name: str
     type: str
     base_url: str | None = None
+    models_url: str | None = None
     api_key: str | None = None
     selected_model: str = ""
+    options: dict | None = None
 
 
 @app.post("/api/providers")
@@ -636,8 +640,10 @@ async def create_provider(request: ProviderCreateRequest):
             name=request.name,
             ptype=request.type,
             base_url=request.base_url,
+            models_url=request.models_url,
             api_key=request.api_key,
             selected_model=request.selected_model,
+            options=request.options,
         )
 
         # Reinitialize agents so they pick up new provider
@@ -653,8 +659,10 @@ class ProviderUpdateRequest(BaseModel):
     name: str | None = None
     type: str | None = None
     base_url: str | None = None
+    models_url: str | None = None
     api_key: str | None = None
     selected_model: str | None = None
+    options: dict | None = None
 
 
 @app.put("/api/providers/{alias}")
@@ -704,6 +712,7 @@ async def fetch_provider_models(alias: str):
 class FetchModelsRequest(BaseModel):
     type: str
     base_url: str | None = None
+    models_url: str | None = None
     api_key: str | None = None
 
 
@@ -715,7 +724,7 @@ async def fetch_models_adhoc(request: FetchModelsRequest):
     try:
         loop = asyncio.get_event_loop()
         models = await loop.run_in_executor(
-            None, _registry.fetch_models_adhoc, request.type, request.api_key, request.base_url,
+            None, _registry.fetch_models_adhoc, request.type, request.api_key, request.base_url, request.models_url,
         )
         return {"models": models}
     except Exception as e:
@@ -727,9 +736,9 @@ async def provider_templates():
     """Return built-in provider templates for the UI."""
     return {
         "templates": [
-            {"name": "Anthropic", "type": "anthropic", "base_url": None},
-            {"name": "OpenAI", "type": "openai", "base_url": "https://api.openai.com/v1"},
-            {"name": "Custom (OpenAI-compatible)", "type": "openai", "base_url": ""},
+            {"name": "Anthropic", "type": "anthropic", "base_url": None, "models_url": "https://api.anthropic.com/v1/models"},
+            {"name": "OpenAI", "type": "openai", "base_url": "https://api.openai.com/v1", "models_url": "https://api.openai.com/v1/models"},
+            {"name": "Custom (OpenAI-compatible)", "type": "openai", "base_url": "", "models_url": ""},
         ]
     }
 
@@ -776,7 +785,7 @@ async def update_agent_models(request: AgentModelUpdate):
 
     if changed:
         # Persist to config.yaml
-        config_path = Path(os.environ.get("CONFIG_PATH", "config.yaml"))
+        config_path = Path(os.environ.get("CONFIG_PATH", "build/config.yaml"))
         _save_config_yaml(config_path, _config)
 
         # Reinitialize agents with new assignments

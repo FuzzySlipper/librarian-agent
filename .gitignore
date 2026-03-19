@@ -1,8 +1,9 @@
-# Generated content
+# Personal build directory (configs, data, stories, lore — user-specific)
+build/
+
+# Legacy locations (can remove once fully migrated)
 generated-images/
 artifacts/
-
-# Runtime data (encrypted keys, model cache)
 data/
 
 # Byte-compiled / optimized / DLL files
@@ -217,8 +218,8 @@ __marimo__/
 .claude/
 
 # Frontend build artifacts and dependencies
-frontend/node_modules/
-frontend/dist/
+dev/frontend/node_modules/
+dev/frontend/dist/
 # Note: static/ is tracked — it contains the pre-built frontend
 # so users don't need Node.js. Rebuild with: ./start.sh --build-frontend
 

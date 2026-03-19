@@ -24,6 +24,7 @@ interface FormState {
   name: string;
   type: string;
   base_url: string;
+  models_url: string;
   api_key: string;
   selected_model: string;
 }
@@ -33,14 +34,41 @@ const EMPTY_FORM: FormState = {
   name: "",
   type: "anthropic",
   base_url: "",
+  models_url: "",
   api_key: "",
   selected_model: "",
 };
 
+const OPTIONS_REFERENCE = `Available options (all optional):
+
+Sampling:
+  temperature      — Randomness (0.0–2.0)
+  top_p            — Nucleus sampling
+  top_k            — Top-k sampling (not all providers)
+  frequency_penalty — Penalize repeated tokens
+  presence_penalty  — Penalize tokens already present
+  repetition_penalty — Combined repetition penalty
+  min_p            — Minimum probability cutoff
+  seed             — Deterministic sampling seed
+
+Provider quirks:
+  reasoning_content   — "auto", true, false
+    Add reasoning_content field (DeepSeek reasoner)
+  strip_empty_required — "auto", true, false
+    Remove empty required arrays from tool schemas
+  extra_body          — {...} arbitrary extra request fields
+
+Example:
+{
+  "temperature": 0.8,
+  "reasoning_content": true,
+  "extra_body": {"reasoning": {"effort": "high"}}
+}`;
+
 const TEMPLATES = [
-  { label: "Anthropic", type: "anthropic", base_url: "" },
-  { label: "OpenAI", type: "openai", base_url: "https://api.openai.com/v1" },
-  { label: "Custom (OpenAI-compatible)", type: "openai", base_url: "" },
+  { label: "Anthropic", type: "anthropic", base_url: "", models_url: "https://api.anthropic.com/v1/models" },
+  { label: "OpenAI", type: "openai", base_url: "https://api.openai.com/v1", models_url: "https://api.openai.com/v1/models" },
+  { label: "Custom (OpenAI-compatible)", type: "openai", base_url: "", models_url: "" },
 ];
 
 export default function ProviderManager({ open, onClose, onChanged }: ProviderManagerProps) {
@@ -52,6 +80,8 @@ export default function ProviderManager({ open, onClose, onChanged }: ProviderMa
   const [fetchingModels, setFetchingModels] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [optionsOpen, setOptionsOpen] = useState(false);
+  const [optionsText, setOptionsText] = useState("{}");
 
   useEffect(() => {
     if (!open) return;
@@ -86,9 +116,12 @@ export default function ProviderManager({ open, onClose, onChanged }: ProviderMa
       name: template.label,
       type: template.type,
       base_url: template.base_url,
+      models_url: template.models_url,
     });
     setModels([]);
     setError(null);
+    setOptionsOpen(false);
+    setOptionsText("{}");
     setEditing("__new__");
   }
 
@@ -98,11 +131,14 @@ export default function ProviderManager({ open, onClose, onChanged }: ProviderMa
       name: p.name,
       type: p.type,
       base_url: p.base_url || "",
+      models_url: p.models_url || "",
       api_key: "",
       selected_model: p.selected_model,
     });
     setModels([]);
     setError(null);
+    setOptionsOpen(false);
+    setOptionsText(p.options ? JSON.stringify(p.options, null, 2) : "{}");
     setEditing(p.alias);
     // Load cached models
     fetchProviderModels(p.alias)
@@ -115,6 +151,8 @@ export default function ProviderManager({ open, onClose, onChanged }: ProviderMa
     setForm(EMPTY_FORM);
     setModels([]);
     setError(null);
+    setOptionsOpen(false);
+    setOptionsText("{}");
   }
 
   async function handleFetchModels() {
@@ -125,6 +163,7 @@ export default function ProviderManager({ open, onClose, onChanged }: ProviderMa
         const data = await fetchModelsForNew({
           type: form.type,
           base_url: form.base_url || null,
+          models_url: form.models_url || null,
           api_key: form.api_key || undefined,
         });
         setModels(data.models);
@@ -139,18 +178,42 @@ export default function ProviderManager({ open, onClose, onChanged }: ProviderMa
     }
   }
 
+  function parseOptions(): Record<string, unknown> | undefined {
+    const trimmed = optionsText.trim();
+    if (!trimmed || trimmed === "{}") return undefined;
+    try {
+      return JSON.parse(trimmed);
+    } catch {
+      return undefined;
+    }
+  }
+
   async function handleSave() {
+    // Validate options JSON before saving
+    const trimmed = optionsText.trim();
+    if (trimmed && trimmed !== "{}") {
+      try {
+        JSON.parse(trimmed);
+      } catch {
+        setError("Invalid JSON in options");
+        return;
+      }
+    }
+
     setSaving(true);
     setError(null);
     try {
+      const opts = parseOptions();
       if (editing === "__new__") {
         await createProvider({
           alias: form.alias,
           name: form.name,
           type: form.type,
           base_url: form.base_url || null,
+          models_url: form.models_url || null,
           api_key: form.api_key || undefined,
           selected_model: form.selected_model,
+          options: opts,
         });
       } else if (editing) {
         const updates: Record<string, unknown> = {};
@@ -158,6 +221,8 @@ export default function ProviderManager({ open, onClose, onChanged }: ProviderMa
         if (form.selected_model) updates.selected_model = form.selected_model;
         if (form.api_key) updates.api_key = form.api_key;
         if (form.base_url !== undefined) updates.base_url = form.base_url || null;
+        if (form.models_url !== undefined) updates.models_url = form.models_url || null;
+        if (opts) updates.options = opts;
         await updateProvider(editing, updates);
       }
       await refresh();
@@ -233,6 +298,20 @@ export default function ProviderManager({ open, onClose, onChanged }: ProviderMa
           )}
 
           <div>
+            <label className="text-xs text-text-muted uppercase tracking-wider">Models URL</label>
+            <input
+              type="text"
+              value={form.models_url}
+              onChange={(e) => setForm({ ...form, models_url: e.target.value })}
+              placeholder="Auto-detected from provider type"
+              className={inputClass}
+            />
+            <p className="text-[11px] text-text-muted mt-1">
+              Endpoint for fetching available models. Leave blank for default.
+            </p>
+          </div>
+
+          <div>
             <label className="text-xs text-text-muted uppercase tracking-wider">
               API Key {!isNew && "(leave blank to keep current)"}
             </label>
@@ -280,6 +359,30 @@ export default function ProviderManager({ open, onClose, onChanged }: ProviderMa
                 placeholder="model-id (or click Fetch Models)"
                 className={inputClass}
               />
+            )}
+          </div>
+
+          <div>
+            <button
+              onClick={() => setOptionsOpen(!optionsOpen)}
+              className="text-xs text-accent hover:text-accent-hover"
+            >
+              {optionsOpen ? "Hide Options" : "Options"}
+              {optionsText.trim() !== "{}" && " *"}
+            </button>
+            {optionsOpen && (
+              <div className="mt-2 flex flex-col gap-2">
+                <pre className="text-[10px] text-text-muted bg-surface-alt/50 rounded-lg px-3 py-2 max-h-40 overflow-y-auto whitespace-pre-wrap">
+                  {OPTIONS_REFERENCE}
+                </pre>
+                <textarea
+                  value={optionsText}
+                  onChange={(e) => setOptionsText(e.target.value)}
+                  placeholder="{}"
+                  rows={6}
+                  className={`${inputClass} font-mono text-xs resize-y`}
+                />
+              </div>
             )}
           </div>
 

@@ -77,21 +77,21 @@ function App() {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, streamStatus]);
 
-  function addResponseMessage(content: string, responseType: string, portrait?: string | null) {
+  function addResponseMessage(content: string, responseType: string, portrait?: string | null, reasoning?: string | null) {
     if (addAsVariantRef.current) {
       // Add as a variant to the last assistant message
       addAsVariantRef.current = false;
       setMessages((prev) => {
         const lastIdx = [...prev].reverse().findIndex((m) => m.role === "assistant");
         if (lastIdx === -1) {
-          return [...prev, makeAssistantMsg(content, responseType, portrait)];
+          return [...prev, makeAssistantMsg(content, responseType, portrait, reasoning)];
         }
         const idx = prev.length - 1 - lastIdx;
         const msg = prev[idx];
         const variants: MessageVariant[] = msg.variants ?? [
-          { content: msg.content, responseType: msg.responseType, timestamp: msg.timestamp, portrait: msg.portrait },
+          { content: msg.content, responseType: msg.responseType, timestamp: msg.timestamp, portrait: msg.portrait, reasoning: msg.reasoning },
         ];
-        const newVariant: MessageVariant = { content, responseType, timestamp: Date.now(), portrait };
+        const newVariant: MessageVariant = { content, responseType, timestamp: Date.now(), portrait, reasoning };
         const newVariants = [...variants, newVariant];
         const newIdx = newVariants.length - 1;
 
@@ -102,6 +102,7 @@ function App() {
             content,
             responseType,
             portrait,
+            reasoning,
             variants: newVariants,
             activeVariant: newIdx,
           },
@@ -109,19 +110,20 @@ function App() {
         ];
       });
     } else {
-      setMessages((prev) => [...prev, makeAssistantMsg(content, responseType, portrait)]);
+      setMessages((prev) => [...prev, makeAssistantMsg(content, responseType, portrait, reasoning)]);
     }
     // Auto TTS for new assistant messages
     tts.onAssistantMessage(content);
   }
 
-  function makeAssistantMsg(content: string, responseType: string, portrait?: string | null): Message {
+  function makeAssistantMsg(content: string, responseType: string, portrait?: string | null, reasoning?: string | null): Message {
     return {
       id: uuid(),
       role: "assistant",
       content,
       responseType,
       portrait,
+      reasoning,
       timestamp: Date.now(),
     };
   }
@@ -132,6 +134,12 @@ function App() {
     const abort = new AbortController();
     abortRef.current = abort;
 
+    // Track the live-streaming message
+    const streamMsgId = uuid();
+    let streamingStarted = false;
+    let accText = "";
+    let accReasoning = "";
+
     try {
       await sendChatStream(
         text,
@@ -140,15 +148,79 @@ function App() {
             setStreamStatus(event.data.message as string);
           } else if (event.type === "tool") {
             setStreamStatus(`Using ${event.data.name}...`);
+            // If we were streaming text before a tool call, clear the streaming msg
+            if (streamingStarted) {
+              setMessages((prev) => prev.filter((m) => m.id !== streamMsgId));
+              streamingStarted = false;
+              accText = "";
+              accReasoning = "";
+            }
+          } else if (event.type === "text_delta") {
+            accText += event.data.text as string;
+            if (!streamingStarted) {
+              streamingStarted = true;
+              setStreamStatus(null);
+              setMessages((prev) => [
+                ...prev,
+                {
+                  id: streamMsgId,
+                  role: "assistant",
+                  content: accText,
+                  responseType: "streaming",
+                  reasoning: accReasoning || null,
+                  timestamp: Date.now(),
+                },
+              ]);
+            } else {
+              const currentText = accText;
+              const currentReasoning = accReasoning;
+              setMessages((prev) =>
+                prev.map((m) =>
+                  m.id === streamMsgId
+                    ? { ...m, content: currentText, reasoning: currentReasoning || null }
+                    : m,
+                ),
+              );
+            }
+          } else if (event.type === "reasoning_delta") {
+            accReasoning += event.data.text as string;
+            if (streamingStarted) {
+              const currentText = accText;
+              const currentReasoning = accReasoning;
+              setMessages((prev) =>
+                prev.map((m) =>
+                  m.id === streamMsgId
+                    ? { ...m, content: currentText, reasoning: currentReasoning || null }
+                    : m,
+                ),
+              );
+            }
           } else if (event.type === "done") {
-            addResponseMessage(
+            // Remove streaming message and add final one
+            if (streamingStarted) {
+              setMessages((prev) => prev.filter((m) => m.id !== streamMsgId));
+            }
+            const reasoning = (event.data.reasoning as string) || null;
+            const msg = makeAssistantMsg(
               event.data.content as string,
               event.data.response_type as string,
               event.data.portrait as string | null | undefined,
             );
+            if (reasoning) {
+              msg.reasoning = reasoning;
+            }
+            addResponseMessage(
+              msg.content,
+              msg.responseType || "discussion",
+              msg.portrait,
+              msg.reasoning,
+            );
             setStreamStatus(null);
             refreshStatus();
           } else if (event.type === "error") {
+            if (streamingStarted) {
+              setMessages((prev) => prev.filter((m) => m.id !== streamMsgId));
+            }
             addResponseMessage(`Error: ${event.data.message}`, "error");
             setStreamStatus(null);
           }
@@ -156,6 +228,9 @@ function App() {
         abort.signal,
       );
     } catch (err) {
+      if (streamingStarted) {
+        setMessages((prev) => prev.filter((m) => m.id !== streamMsgId));
+      }
       if ((err as Error).name !== "AbortError") {
         addResponseMessage(
           `Error: ${err instanceof Error ? err.message : "Connection failed"}`,
