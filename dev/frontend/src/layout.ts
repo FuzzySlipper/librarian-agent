@@ -164,8 +164,9 @@ export function applyStyles(styles: Record<string, string>) {
 
 /**
  * Fetch and apply a layout by name.
+ * If saveAsDefault is true (default), persists the choice to config.yaml.
  */
-export async function loadLayout(name: string): Promise<LayoutConfig> {
+export async function loadLayout(name: string, saveAsDefault = true): Promise<LayoutConfig> {
   const resp = await fetch(`/api/layouts/${encodeURIComponent(name)}`);
   if (!resp.ok) {
     throw new Error(`Layout '${name}' not found`);
@@ -177,6 +178,15 @@ export async function loadLayout(name: string): Promise<LayoutConfig> {
   currentLayout = layout;
   applyStyles(layout.styles);
   onLayoutChange?.(layout);
+
+  // Persist as default layout
+  if (saveAsDefault) {
+    fetch("/api/layout", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name }),
+    }).catch(() => {}); // Fire and forget
+  }
 
   return layout;
 }
@@ -192,13 +202,21 @@ export async function listLayouts(): Promise<string[]> {
 }
 
 /**
- * Initialize with the default layout.
+ * Initialize with the user's configured default layout.
  */
-export async function init(): Promise<void> {
+export async function init(defaultName?: string): Promise<void> {
+  const name = defaultName || "default";
   try {
-    await loadLayout("default");
+    await loadLayout(name, false); // Don't re-save on init
   } catch {
-    // No default layout file — use built-in defaults
+    if (name !== "default") {
+      // Configured layout not found, try "default"
+      try {
+        await loadLayout("default", false);
+        return;
+      } catch { /* fall through */ }
+    }
+    // No layout file — use built-in defaults
     currentLayout = { ...DEFAULT_LAYOUT };
   }
 }

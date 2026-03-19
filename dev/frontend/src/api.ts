@@ -176,6 +176,31 @@ export async function newSession(): Promise<unknown> {
   return request("/api/session/new", { method: "POST" });
 }
 
+// ── Session management ──
+
+export interface SessionInfo {
+  id: string;
+  name: string;
+  mode: string;
+  turns: number;
+  updated_at: string;
+  is_current: boolean;
+}
+
+export async function listSessions(): Promise<{ sessions: SessionInfo[] }> {
+  return request("/api/sessions");
+}
+
+export async function loadSession(
+  id: string,
+): Promise<{ status: string; messages: Array<{ role: string; content: string }>; mode: string }> {
+  return request(`/api/sessions/${encodeURIComponent(id)}/load`, { method: "POST" });
+}
+
+export async function deleteSession(id: string): Promise<unknown> {
+  return request(`/api/sessions/${encodeURIComponent(id)}`, { method: "DELETE" });
+}
+
 export interface LoreFileInfo {
   path: string;
   tokens: number;

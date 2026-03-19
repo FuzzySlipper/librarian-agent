@@ -48,6 +48,10 @@ class ForgeConfig(BaseModel):
     planner_model: str | None = None   # None = use models.orchestrator
 
 
+class LayoutPrefsConfig(BaseModel):
+    active: str = "default"  # Layout name to load on startup
+
+
 class PathsConfig(BaseModel):
     lore: Path = Path("./build/lore")
     story: Path = Path("./build/story")
@@ -74,6 +78,7 @@ class AppConfig(BaseModel):
     persona: PersonaConfig = Field(default_factory=PersonaConfig)
     lore: LoreConfig = Field(default_factory=LoreConfig)
     writing_style: WritingStyleConfig = Field(default_factory=WritingStyleConfig)
+    layout: LayoutPrefsConfig = Field(default_factory=LayoutPrefsConfig)
     forge: ForgeConfig = Field(default_factory=ForgeConfig)
     paths: PathsConfig = Field(default_factory=PathsConfig)
 

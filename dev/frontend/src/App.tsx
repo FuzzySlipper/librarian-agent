@@ -21,6 +21,7 @@ import LoreBrowser from "./components/LoreBrowser";
 import PromptBrowser from "./components/PromptBrowser";
 import LayoutPicker from "./components/LayoutPicker";
 import ProviderManager from "./components/ProviderManager";
+import SessionBrowser from "./components/SessionBrowser";
 
 /** uuid() requires a secure context (HTTPS); fall back for plain HTTP. */
 const uuid = (): string =>
@@ -47,6 +48,7 @@ function App() {
   const [promptsOpen, setPromptsOpen] = useState(false);
   const [layoutOpen, setLayoutOpen] = useState(false);
   const [providerOpen, setProviderOpen] = useState(false);
+  const [sessionsOpen, setSessionsOpen] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   // When true, the next response will be added as a variant to the last assistant message
@@ -65,13 +67,26 @@ function App() {
   }, []);
 
   useEffect(() => {
-    refreshStatus();
     tts.init();
     layoutManager.setOnLayoutChange(setLayout);
-    layoutManager.init();
     artifactManager.setOnArtifactChange(setArtifact);
     artifactManager.init();
-  }, [refreshStatus]);
+
+    // Fetch status first, then init layout with the configured default
+    getStatus()
+      .then((s) => {
+        setStatus(s);
+        setMode(s.mode);
+        layoutManager.init(s.layout);
+      })
+      .catch(() => {
+        setStatus(null);
+        layoutManager.init();
+      });
+    getMode()
+      .then((m) => setHasPending(m.pending_content))
+      .catch(() => {});
+  }, []);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -434,6 +449,7 @@ function App() {
         onOpenPrompts={() => setPromptsOpen(true)}
         onOpenLayout={() => setLayoutOpen(true)}
         onOpenProviders={() => setProviderOpen(true)}
+        onOpenSessions={() => setSessionsOpen(true)}
         onNewSession={async () => {
           await newSession();
           setMessages([]);
@@ -534,6 +550,22 @@ function App() {
         open={providerOpen}
         onClose={() => setProviderOpen(false)}
         onChanged={refreshStatus}
+      />
+      <SessionBrowser
+        open={sessionsOpen}
+        onClose={() => setSessionsOpen(false)}
+        onLoad={(msgs, _loadedMode) => {
+          // Convert backend messages to frontend Message objects
+          const restored: Message[] = msgs.map((m, i) => ({
+            id: uuid(),
+            role: m.role as "user" | "assistant",
+            content: m.content,
+            timestamp: Date.now() - (msgs.length - i) * 1000,
+          }));
+          setMessages(restored);
+          setHasPending(false);
+          refreshStatus();
+        }}
       />
     </div>
   );

@@ -23,6 +23,9 @@ lore:
 writing_style:
   active: default            # Filename (without .md) in paths.writing_styles
 
+layout:
+  active: default            # Layout name (without .md) from paths.layouts
+
 paths:
   lore: ./build/lore
   story: ./build/story

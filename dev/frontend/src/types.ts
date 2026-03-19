@@ -35,6 +35,7 @@ export interface Status {
   writing_style: string;
   model: string;
   conversation_turns: number;
+  layout: string;
 }
 
 export interface Profiles {

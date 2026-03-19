@@ -9,6 +9,7 @@ import json
 import logging
 import os
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from functools import partial
 from pathlib import Path
 from queue import Queue, Empty
@@ -38,6 +39,62 @@ log = logging.getLogger(__name__)
 _orchestrator: Orchestrator | None = None
 _config: AppConfig | None = None
 _registry: ProviderRegistry | None = None
+_current_session_id: str | None = None
+
+
+# ── Session persistence helpers ──────────────────────────────────────
+
+def _sessions_dir() -> Path:
+    """Return the sessions directory, creating it if needed."""
+    d = Path(_config.paths.data) / "sessions" if _config else Path("build/data/sessions")
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def _generate_session_id() -> str:
+    """Create a timestamp-based session ID."""
+    return datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+
+
+def _auto_name_session(history: list[dict]) -> str:
+    """Generate a short name from the first user message."""
+    for msg in history:
+        if msg.get("role") == "user":
+            text = msg["content"]
+            # First 60 chars, cleaned up
+            name = text[:60].strip().replace("\n", " ")
+            if len(text) > 60:
+                name += "..."
+            return name
+    return "empty session"
+
+
+def _save_session(session_id: str, history: list[dict], mode: str):
+    """Write session to disk."""
+    if not history:
+        return
+    path = _sessions_dir() / f"{session_id}.json"
+    data = {
+        "id": session_id,
+        "name": _auto_name_session(history),
+        "mode": mode,
+        "turns": len(history) // 2,
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+        "messages": history,
+    }
+    path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+
+
+def _auto_save():
+    """Save current session if there's history."""
+    global _current_session_id
+    if _orchestrator is None:
+        return
+    if not _orchestrator.conversation_history:
+        return
+    if _current_session_id is None:
+        _current_session_id = _generate_session_id()
+    _save_session(_current_session_id, _orchestrator.conversation_history, _orchestrator.mode.value)
 
 
 @asynccontextmanager
@@ -130,6 +187,8 @@ async def chat(request: ChatRequest) -> ChatResponse:
         partial(_orchestrator.handle, request.message),
     )
 
+    _auto_save()
+
     return ChatResponse(
         content=response.content,
         response_type=response.response_type,
@@ -158,6 +217,9 @@ async def chat_stream(request: ChatRequest):
         try:
             for event in _orchestrator.handle_stream(request.message):
                 queue.put(event)
+                # Auto-save after each completed response
+                if event.get("event") == "done":
+                    _auto_save()
         except Exception as e:
             queue.put({"event": "error", "message": str(e)})
         finally:
@@ -219,6 +281,7 @@ async def status():
         "writing_style": _config.writing_style.active,
         "model": model_display,
         "conversation_turns": len(_orchestrator.conversation_history) // 2,
+        "layout": _config.layout.active,
     }
 
 
@@ -365,14 +428,85 @@ async def get_projects():
 @app.post("/api/session/new")
 async def new_session():
     """Clear conversation history, starting a fresh session."""
+    global _current_session_id
     if _orchestrator is None:
         return JSONResponse(status_code=503, content={"error": "System not initialized"})
+
+    # Save current session before clearing
+    _auto_save()
 
     _orchestrator.conversation_history.clear()
     _orchestrator.pending_content = None
     _orchestrator.last_prompt = None
+    _current_session_id = None
 
     return {"status": "ok", "message": "Session cleared"}
+
+
+@app.get("/api/sessions")
+async def list_sessions():
+    """List saved sessions, newest first."""
+    sessions = []
+    sdir = _sessions_dir()
+    for path in sorted(sdir.glob("*.json"), reverse=True):
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+            sessions.append({
+                "id": data.get("id", path.stem),
+                "name": data.get("name", "untitled"),
+                "mode": data.get("mode", "general"),
+                "turns": data.get("turns", 0),
+                "updated_at": data.get("updated_at", ""),
+                "is_current": data.get("id") == _current_session_id,
+            })
+        except Exception:
+            continue
+    return {"sessions": sessions}
+
+
+@app.post("/api/sessions/{session_id}/load")
+async def load_session(session_id: str):
+    """Load a saved session, replacing current conversation."""
+    global _current_session_id
+    if _orchestrator is None:
+        return JSONResponse(status_code=503, content={"error": "System not initialized"})
+
+    # Save current session first
+    _auto_save()
+
+    path = _sessions_dir() / f"{session_id}.json"
+    if not path.exists():
+        return JSONResponse(status_code=404, content={"error": "Session not found"})
+
+    data = json.loads(path.read_text(encoding="utf-8"))
+    messages = data.get("messages", [])
+
+    _orchestrator.conversation_history.clear()
+    _orchestrator.conversation_history.extend(messages)
+    _orchestrator.pending_content = None
+    _orchestrator.last_prompt = None
+    _current_session_id = session_id
+
+    return {
+        "status": "ok",
+        "messages": messages,
+        "mode": data.get("mode", "general"),
+    }
+
+
+@app.delete("/api/sessions/{session_id}")
+async def delete_session(session_id: str):
+    """Delete a saved session."""
+    global _current_session_id
+    path = _sessions_dir() / f"{session_id}.json"
+    if not path.exists():
+        return JSONResponse(status_code=404, content={"error": "Session not found"})
+
+    path.unlink()
+    if _current_session_id == session_id:
+        _current_session_id = None
+
+    return {"status": "ok"}
 
 
 @app.get("/api/portraits")
@@ -590,6 +724,24 @@ async def get_layout(name: str):
         return JSONResponse(status_code=404, content={"error": f"Layout '{name}' not found"})
 
     return {"name": name, "content": path.read_text(encoding="utf-8")}
+
+
+class LayoutSetRequest(BaseModel):
+    name: str
+
+
+@app.post("/api/layout")
+async def set_default_layout(request: LayoutSetRequest):
+    """Set the default layout and persist to config.yaml."""
+    if _config is None:
+        return JSONResponse(status_code=503, content={"error": "System not initialized"})
+
+    _config.layout.active = request.name
+    config_path = Path(os.environ.get("CONFIG_PATH", "build/config.yaml"))
+    _save_config_yaml(config_path, _config)
+
+    return {"status": "ok", "layout": request.name}
+
 
 
 # ── Provider endpoints ────────────────────────────────────────────────
@@ -818,6 +970,10 @@ def _save_config_yaml(config_path: Path, config: AppConfig):
     raw["models"]["orchestrator"] = config.models.orchestrator
     raw["models"]["prose_writer"] = config.models.prose_writer
     raw["models"]["librarian"] = config.models.librarian
+
+    # Update layout
+    raw.setdefault("layout", {})
+    raw["layout"]["active"] = config.layout.active
 
     with open(config_path, "w") as f:
         yaml.dump(raw, f, default_flow_style=False, sort_keys=False)

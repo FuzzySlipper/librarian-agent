@@ -11,9 +11,10 @@ interface HeaderBarProps {
   onOpenLayout: () => void;
   onOpenProviders: () => void;
   onNewSession: () => void;
+  onOpenSessions: () => void;
 }
 
-export default function HeaderBar({ status, layoutName, onOpenProfile, onOpenMode, onOpenContext, onOpenLore, onOpenPrompts, onOpenLayout, onOpenProviders, onNewSession }: HeaderBarProps) {
+export default function HeaderBar({ status, layoutName, onOpenProfile, onOpenMode, onOpenContext, onOpenLore, onOpenPrompts, onOpenLayout, onOpenProviders, onNewSession, onOpenSessions }: HeaderBarProps) {
   const ready = status?.status === "ready";
 
   return (
@@ -40,6 +41,13 @@ export default function HeaderBar({ status, layoutName, onOpenProfile, onOpenMod
               title="Start new session"
             >
               +
+            </button>
+            <button
+              onClick={onOpenSessions}
+              className="text-xs px-2 py-1 rounded-md bg-surface-alt text-text-muted hover:text-text transition-colors"
+              title="Browse saved sessions"
+            >
+              sessions
             </button>
             <button
               onClick={onOpenLore}

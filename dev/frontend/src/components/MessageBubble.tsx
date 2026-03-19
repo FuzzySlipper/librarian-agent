@@ -52,6 +52,42 @@ export default function MessageBubble({ message, index, mode, onEdit, onRetry, o
     if (e.key === "Enter" && e.ctrlKey) handleSave();
   }
 
+  // ── Top bar: response type label, action buttons, index ──
+  const topBar = (
+    <div className="flex items-center justify-between gap-2 mb-1">
+      <div className="flex items-center gap-2 min-w-0">
+        {!isUser && message.responseType && message.responseType !== "discussion" && message.responseType !== "streaming" && (
+          <span className="text-[10px] uppercase tracking-wider text-accent">
+            {isPending ? "pending review" : message.responseType}
+          </span>
+        )}
+      </div>
+      <div className="flex items-center gap-1.5 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
+        {!isSystem && onRetry && !editing && (
+          <button
+            onClick={() => onRetry(message.id)}
+            className="text-[10px] text-text-muted/40 hover:text-text transition-colors select-none"
+            title={isUser ? "Resend this message" : "Regenerate response"}
+          >
+            retry
+          </button>
+        )}
+        {!isSystem && onEdit && !editing && (
+          <button
+            onClick={() => setEditing(true)}
+            className="text-[10px] text-text-muted/40 hover:text-text transition-colors select-none"
+            title="Edit message"
+          >
+            edit
+          </button>
+        )}
+      </div>
+      <span className="text-[9px] text-text-muted/40 font-mono select-none leading-none">
+        {index}
+      </span>
+    </div>
+  );
+
   const bubbleContent = (
     <div
       className={`group max-w-[85%] sm:max-w-[75%] rounded-xl px-4 py-3 leading-relaxed text-[15px] ${
@@ -59,22 +95,8 @@ export default function MessageBubble({ message, index, mode, onEdit, onRetry, o
           ? "bg-surface-alt rounded-br-sm"
           : `bg-surface rounded-bl-sm ${isProse ? "border-l-3 border-accent" : ""} ${isPending ? "ring-1 ring-accent/40" : ""}`
       } ${showPortrait ? "max-w-none sm:max-w-none" : ""}`}
-      onClick={() => {
-        if (!isSystem && onEdit && !editing) setEditing(true);
-      }}
     >
-      <div className="flex items-start justify-between gap-2">
-        <div className="flex-1 min-w-0">
-          {!isUser && message.responseType && message.responseType !== "discussion" && (
-            <div className="text-[10px] uppercase tracking-wider text-accent mb-1">
-              {isPending ? "pending review" : message.responseType}
-            </div>
-          )}
-        </div>
-        <span className="text-[9px] text-text-muted/40 font-mono shrink-0 select-none leading-none pt-0.5">
-          {index}
-        </span>
-      </div>
+      {topBar}
 
       {!isUser && message.reasoning && (
         <details className="mb-2">
@@ -148,12 +170,6 @@ export default function MessageBubble({ message, index, mode, onEdit, onRetry, o
               >
                 &rarr;
               </button>
-            </div>
-          )}
-
-          {!isSystem && onEdit && (
-            <div className="text-[10px] text-text-muted mt-1 opacity-0 group-hover:opacity-100 transition-opacity">
-              click to edit
             </div>
           )}
         </>
