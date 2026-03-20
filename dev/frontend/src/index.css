@@ -38,3 +38,42 @@
   background-color: #222244 !important;
   color: #e0e0e0 !important;
 }
+
+/* ── Background image transparency ── */
+.has-bg-image .bg-bg {
+  background-color: rgba(26, 26, 46, 0.85);
+}
+
+.has-bg-image .bg-surface {
+  background-color: rgba(22, 33, 62, 0.9);
+}
+
+/* ── Prose text theme ── */
+:root {
+  --prose-quote: inherit;
+  --prose-em: inherit;
+  --prose-strong: inherit;
+  --prose-blockquote: inherit;
+  --prose-base: inherit;
+}
+
+.prose-themed {
+  color: var(--prose-base);
+}
+
+.prose-themed em {
+  color: var(--prose-em);
+}
+
+.prose-themed strong {
+  color: var(--prose-strong);
+}
+
+.prose-themed blockquote,
+.prose-themed blockquote p {
+  color: var(--prose-blockquote);
+}
+
+.prose-themed .dialogue {
+  color: var(--prose-quote);
+}

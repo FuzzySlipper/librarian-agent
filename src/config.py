@@ -48,6 +48,11 @@ class ForgeConfig(BaseModel):
     planner_model: str | None = None   # None = use models.orchestrator
 
 
+class RoleplayConfig(BaseModel):
+    ai_character: str | None = None   # Filename (without .yaml) of the AI character card
+    user_character: str | None = None  # Filename (without .yaml) of the user character card
+
+
 class LayoutPrefsConfig(BaseModel):
     active: str = "default"  # Layout name to load on startup
 
@@ -64,6 +69,8 @@ class PathsConfig(BaseModel):
     council: Path = Path("./build/council")
     layouts: Path = Path("./build/layouts")
     layout_images: Path = Path("./build/layout-images")
+    backgrounds: Path = Path("./build/backgrounds")
+    character_cards: Path = Path("./build/character-cards")
     forge: Path = Path("./build/forge")
     forge_prompts: Path = Path("./build/forge-prompts")
     data: Path = Path("./build/data")
@@ -79,6 +86,7 @@ class AppConfig(BaseModel):
     lore: LoreConfig = Field(default_factory=LoreConfig)
     writing_style: WritingStyleConfig = Field(default_factory=WritingStyleConfig)
     layout: LayoutPrefsConfig = Field(default_factory=LayoutPrefsConfig)
+    roleplay: RoleplayConfig = Field(default_factory=RoleplayConfig)
     forge: ForgeConfig = Field(default_factory=ForgeConfig)
     paths: PathsConfig = Field(default_factory=PathsConfig)
 

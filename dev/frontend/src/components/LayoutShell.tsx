@@ -7,6 +7,7 @@ interface LayoutShellProps {
   layout: LayoutConfig;
   chatContent: ReactNode;
   artifact: Artifact | null;
+  backgroundImage?: string | null;
 }
 
 /** Format-specific styling classes for the artifact panel. */
@@ -101,20 +102,38 @@ function PanelSlot({
   return null;
 }
 
-export default function LayoutShell({ layout, chatContent, artifact }: LayoutShellProps) {
+export default function LayoutShell({ layout, chatContent, artifact, backgroundImage }: LayoutShellProps) {
   const isSingleColumn = layout.panels.length <= 1;
+
+  const bgStyle: React.CSSProperties = backgroundImage
+    ? {
+        backgroundImage: `url(${backgroundImage})`,
+        backgroundSize: "cover",
+        backgroundPosition: "center center",
+        backgroundRepeat: "no-repeat",
+        backgroundAttachment: "fixed",
+      }
+    : {};
+
+  const bgClass = backgroundImage ? "has-bg-image" : "";
 
   // Single column: no grid, just render chat directly
   if (isSingleColumn) {
-    return <>{chatContent}</>;
+    if (!backgroundImage) return <>{chatContent}</>;
+    return (
+      <div className={`h-dvh ${bgClass}`} style={bgStyle}>
+        {chatContent}
+      </div>
+    );
   }
 
   return (
     <div
-      className="h-dvh"
+      className={`h-dvh ${bgClass}`}
       style={{
         display: "grid",
         gridTemplateColumns: layout.columns,
+        ...bgStyle,
       }}
     >
       {layout.panels.map((panel) =>

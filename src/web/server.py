@@ -118,6 +118,12 @@ async def lifespan(app: FastAPI):
         app.mount("/portraits", StaticFiles(directory=str(portraits_dir)), name="portraits")
         log.info("Portraits directory mounted: %s", portraits_dir)
 
+    # Mount backgrounds directory for serving background images
+    backgrounds_dir = Path(_config.paths.backgrounds)
+    if backgrounds_dir.is_dir():
+        app.mount("/backgrounds", StaticFiles(directory=str(backgrounds_dir)), name="backgrounds")
+        log.info("Backgrounds directory mounted: %s", backgrounds_dir)
+
     # Mount generated-images directory for serving generated images
     gen_images_dir = Path(os.environ.get("IMAGE_OUTPUT_DIR", "build/generated-images"))
     gen_images_dir.mkdir(exist_ok=True)
@@ -147,20 +153,37 @@ if _has_static:
 
 
 def _get_current_portrait() -> str | None:
-    """Read the current portrait from the orchestrator's state file."""
-    if _orchestrator is None:
-        return None
-    path = _orchestrator._state_file_path()
-    if path is None or not path.exists():
-        return None
-    try:
-        import yaml
-        state = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-        portrait = state.get("portrait")
-        if portrait:
-            return f"/portraits/{portrait}"
-    except Exception:
-        pass
+    """Get the AI character portrait. Checks: state file → active character card."""
+    # First check state file (can be set per-scene)
+    if _orchestrator is not None:
+        path = _orchestrator._state_file_path()
+        if path is not None and path.exists():
+            try:
+                import yaml
+                state = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+                portrait = state.get("portrait")
+                if portrait:
+                    return f"/portraits/{portrait}"
+            except Exception:
+                pass
+
+    # Fall back to active AI character card portrait
+    if _config and _config.roleplay.ai_character:
+        from src.character_cards import load_card
+        card = load_card(Path(_config.paths.character_cards) / f"{_config.roleplay.ai_character}.yaml")
+        if card and card.get("portrait"):
+            return f"/portraits/{card['portrait']}"
+
+    return None
+
+
+def _get_user_portrait() -> str | None:
+    """Get the user character portrait from the active user character card."""
+    if _config and _config.roleplay.user_character:
+        from src.character_cards import load_card
+        card = load_card(Path(_config.paths.character_cards) / f"{_config.roleplay.user_character}.yaml")
+        if card and card.get("portrait"):
+            return f"/portraits/{card['portrait']}"
     return None
 
 
@@ -172,6 +195,7 @@ class ChatResponse(BaseModel):
     content: str
     response_type: str
     portrait: str | None = None
+    user_portrait: str | None = None
 
 
 @app.post("/api/chat", response_model=ChatResponse)
@@ -193,6 +217,7 @@ async def chat(request: ChatRequest) -> ChatResponse:
         content=response.content,
         response_type=response.response_type,
         portrait=_get_current_portrait(),
+        user_portrait=_get_user_portrait(),
     )
 
 
@@ -243,6 +268,7 @@ async def chat_stream(request: ChatRequest):
             # Attach current portrait to done events
             if event_type == "done":
                 event["portrait"] = _get_current_portrait()
+                event["user_portrait"] = _get_user_portrait()
             yield f"event: {event_type}\ndata: {json.dumps(event)}\n\n"
 
     return StreamingResponse(
@@ -282,6 +308,8 @@ async def status():
         "model": model_display,
         "conversation_turns": len(_orchestrator.conversation_history) // 2,
         "layout": _config.layout.active,
+        "ai_character": _config.roleplay.ai_character,
+        "user_character": _config.roleplay.user_character,
     }
 
 
@@ -790,6 +818,192 @@ async def write_persona(file_path: str, request: PersonaWriteRequest):
     return {"status": "ok", "path": file_path, "tokens": len(request.content) // 4}
 
 
+# ── Writing style endpoints ───────────────────────────────────────────
+
+
+@app.get("/api/writing-styles")
+async def list_writing_styles():
+    """List all writing style files."""
+    if _config is None:
+        return JSONResponse(status_code=503, content={"error": "System not initialized"})
+
+    styles_dir = Path(_config.paths.writing_styles)
+    if not styles_dir.exists():
+        return {"files": [], "active": _config.writing_style.active}
+
+    files = []
+    for p in sorted(styles_dir.glob("*.md")):
+        try:
+            content = p.read_text(encoding="utf-8")
+            tokens = len(content) // 4
+        except Exception:
+            content = ""
+            tokens = 0
+        files.append({"path": p.name, "name": p.stem, "tokens": tokens, "size": len(content)})
+
+    return {"files": files, "active": _config.writing_style.active}
+
+
+@app.get("/api/writing-styles/{name}")
+async def read_writing_style(name: str):
+    """Read a writing style file."""
+    if _config is None:
+        return JSONResponse(status_code=503, content={"error": "System not initialized"})
+
+    path = Path(_config.paths.writing_styles) / f"{name}.md"
+    if not path.exists():
+        return JSONResponse(status_code=404, content={"error": "Style not found"})
+
+    content = path.read_text(encoding="utf-8")
+    return {"name": name, "content": content, "tokens": len(content) // 4}
+
+
+class StyleWriteRequest(BaseModel):
+    content: str
+
+
+@app.put("/api/writing-styles/{name}")
+async def write_writing_style(name: str, request: StyleWriteRequest):
+    """Write a writing style file. Reinitializes agents."""
+    global _orchestrator
+
+    if _config is None:
+        return JSONResponse(status_code=503, content={"error": "System not initialized"})
+
+    styles_dir = Path(_config.paths.writing_styles)
+    styles_dir.mkdir(parents=True, exist_ok=True)
+    path = styles_dir / f"{name}.md"
+    path.write_text(request.content, encoding="utf-8")
+
+    loop = asyncio.get_event_loop()
+    await loop.run_in_executor(None, _reinitialize_agents)
+
+    return {"status": "ok", "name": name, "tokens": len(request.content) // 4}
+
+
+# ── Character card endpoints ─────────────────────────────────────────
+
+
+@app.get("/api/character-cards")
+async def list_character_cards():
+    """List all character cards and active selections."""
+    if _config is None:
+        return JSONResponse(status_code=503, content={"error": "System not initialized"})
+
+    from src.character_cards import list_cards
+    cards_dir = Path(_config.paths.character_cards)
+    cards = list_cards(cards_dir)
+
+    return {
+        "cards": cards,
+        "active_ai": _config.roleplay.ai_character,
+        "active_user": _config.roleplay.user_character,
+    }
+
+
+@app.get("/api/character-cards/{name}")
+async def read_character_card(name: str):
+    """Read a single character card."""
+    if _config is None:
+        return JSONResponse(status_code=503, content={"error": "System not initialized"})
+
+    from src.character_cards import load_card
+    path = Path(_config.paths.character_cards) / f"{name}.yaml"
+    card = load_card(path)
+    if card is None:
+        return JSONResponse(status_code=404, content={"error": "Card not found"})
+    return card
+
+
+class CharacterCardRequest(BaseModel):
+    name: str
+    portrait: str = ""
+    personality: str = ""
+    description: str = ""
+    scenario: str = ""
+    greeting: str = ""
+
+
+@app.post("/api/character-cards")
+async def create_character_card(request: CharacterCardRequest):
+    """Create a new character card."""
+    if _config is None:
+        return JSONResponse(status_code=503, content={"error": "System not initialized"})
+
+    from src.character_cards import save_card
+    # Sanitize filename
+    filename = request.name.strip().lower().replace(" ", "-")
+    filename = "".join(c for c in filename if c.isalnum() or c in "-_")
+    if not filename:
+        return JSONResponse(status_code=400, content={"error": "Invalid name"})
+
+    cards_dir = Path(_config.paths.character_cards)
+    path = cards_dir / f"{filename}.yaml"
+    if path.exists():
+        return JSONResponse(status_code=409, content={"error": "Card already exists"})
+
+    save_card(path, request.model_dump())
+    return {"status": "ok", "filename": filename}
+
+
+@app.put("/api/character-cards/{name}")
+async def update_character_card(name: str, request: CharacterCardRequest):
+    """Update a character card."""
+    if _config is None:
+        return JSONResponse(status_code=503, content={"error": "System not initialized"})
+
+    from src.character_cards import save_card
+    path = Path(_config.paths.character_cards) / f"{name}.yaml"
+    save_card(path, request.model_dump())
+    return {"status": "ok", "filename": name}
+
+
+@app.delete("/api/character-cards/{name}")
+async def delete_character_card(name: str):
+    """Delete a character card."""
+    if _config is None:
+        return JSONResponse(status_code=503, content={"error": "System not initialized"})
+
+    path = Path(_config.paths.character_cards) / f"{name}.yaml"
+    if not path.exists():
+        return JSONResponse(status_code=404, content={"error": "Card not found"})
+    path.unlink()
+
+    # Clear if it was active
+    if _config.roleplay.ai_character == name:
+        _config.roleplay.ai_character = None
+    if _config.roleplay.user_character == name:
+        _config.roleplay.user_character = None
+
+    return {"status": "ok"}
+
+
+class ActivateCardsRequest(BaseModel):
+    ai_character: str | None = None
+    user_character: str | None = None
+
+
+@app.post("/api/character-cards/activate")
+async def activate_character_cards(request: ActivateCardsRequest):
+    """Set the active AI and/or user character cards for roleplay."""
+    if _config is None:
+        return JSONResponse(status_code=503, content={"error": "System not initialized"})
+
+    if request.ai_character is not None:
+        _config.roleplay.ai_character = request.ai_character or None
+    if request.user_character is not None:
+        _config.roleplay.user_character = request.user_character or None
+
+    config_path = Path(os.environ.get("CONFIG_PATH", "build/config.yaml"))
+    _save_config_yaml(config_path, _config)
+
+    return {
+        "status": "ok",
+        "active_ai": _config.roleplay.ai_character,
+        "active_user": _config.roleplay.user_character,
+    }
+
+
 # ── Layout endpoints ──────────────────────────────────────────────────
 
 
@@ -843,6 +1057,51 @@ async def set_default_layout(request: LayoutSetRequest):
     _save_config_yaml(config_path, _config)
 
     return {"status": "ok", "layout": request.name}
+
+
+class LayoutSaveRequest(BaseModel):
+    content: str
+
+
+@app.put("/api/layouts/{name}")
+async def save_layout(name: str, request: LayoutSaveRequest):
+    """Save/update a layout config file."""
+    if _config is None:
+        return JSONResponse(status_code=503, content={"error": "System not initialized"})
+
+    layouts_dir = Path(_config.paths.layouts)
+    layouts_dir.mkdir(parents=True, exist_ok=True)
+    path = (layouts_dir / f"{name}.md").resolve()
+
+    try:
+        path.relative_to(layouts_dir.resolve())
+    except ValueError:
+        return JSONResponse(status_code=403, content={"error": "Invalid path"})
+
+    path.write_text(request.content, encoding="utf-8")
+    return {"status": "ok", "name": name}
+
+
+@app.get("/api/backgrounds")
+async def list_backgrounds():
+    """List available background images."""
+    if _config is None:
+        return JSONResponse(status_code=503, content={"error": "System not initialized"})
+
+    bg_dir = Path(_config.paths.backgrounds)
+    if not bg_dir.is_dir():
+        return {"backgrounds": []}
+
+    image_exts = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg"}
+    backgrounds = []
+    for p in sorted(bg_dir.iterdir()):
+        if p.is_file() and p.suffix.lower() in image_exts:
+            backgrounds.append({
+                "filename": p.name,
+                "url": f"/backgrounds/{p.name}",
+            })
+
+    return {"backgrounds": backgrounds}
 
 
 
@@ -1081,6 +1340,11 @@ def _save_config_yaml(config_path: Path, config: AppConfig):
     raw.setdefault("lore", {})
     raw["lore"]["active"] = config.lore.active
 
+    # Update roleplay character cards
+    raw.setdefault("roleplay", {})
+    raw["roleplay"]["ai_character"] = config.roleplay.ai_character
+    raw["roleplay"]["user_character"] = config.roleplay.user_character
+
     with open(config_path, "w") as f:
         yaml.dump(raw, f, default_flow_style=False, sort_keys=False)
 
@@ -1140,6 +1404,7 @@ async def generate_artifact(request: ArtifactRequest):
             event_type = event.pop("event", "status")
             if event_type == "done":
                 event["portrait"] = _get_current_portrait()
+                event["user_portrait"] = _get_user_portrait()
             yield f"event: {event_type}\ndata: {json.dumps(event)}\n\n"
 
     return StreamingResponse(
@@ -1238,6 +1503,7 @@ async def council_query(request: CouncilRequest):
             event_type = event.pop("event", "status")
             if event_type == "done":
                 event["portrait"] = _get_current_portrait()
+                event["user_portrait"] = _get_user_portrait()
             yield f"event: {event_type}\ndata: {json.dumps(event)}\n\n"
 
     return StreamingResponse(

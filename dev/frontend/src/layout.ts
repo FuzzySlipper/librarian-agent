@@ -44,6 +44,10 @@ const DEFAULT_LAYOUT: LayoutConfig = {
 
 let currentLayout: LayoutConfig = { ...DEFAULT_LAYOUT };
 let onLayoutChange: ((layout: LayoutConfig) => void) | null = null;
+let onBackgroundChange: ((bg: string | null) => void) | null = null;
+let currentBackground: string | null = null;
+
+const BG_STORAGE_KEY = "background-image";
 
 export function setOnLayoutChange(cb: (layout: LayoutConfig) => void) {
   onLayoutChange = cb;
@@ -205,6 +209,13 @@ export async function listLayouts(): Promise<string[]> {
  * Initialize with the user's configured default layout.
  */
 export async function init(defaultName?: string): Promise<void> {
+  // Restore background from localStorage
+  const savedBg = localStorage.getItem(BG_STORAGE_KEY);
+  if (savedBg) {
+    currentBackground = savedBg;
+    onBackgroundChange?.(currentBackground);
+  }
+
   const name = defaultName || "default";
   try {
     await loadLayout(name, false); // Don't re-save on init
@@ -219,4 +230,49 @@ export async function init(defaultName?: string): Promise<void> {
     // No layout file — use built-in defaults
     currentLayout = { ...DEFAULT_LAYOUT };
   }
+}
+
+// ── Background image ──
+
+export function setOnBackgroundChange(cb: (bg: string | null) => void) {
+  onBackgroundChange = cb;
+}
+
+export function getBackground(): string | null {
+  return currentBackground;
+}
+
+export function setBackground(url: string | null): void {
+  currentBackground = url;
+  if (url) {
+    localStorage.setItem(BG_STORAGE_KEY, url);
+  } else {
+    localStorage.removeItem(BG_STORAGE_KEY);
+  }
+  onBackgroundChange?.(url);
+}
+
+export async function listBackgrounds(): Promise<{ filename: string; url: string }[]> {
+  const resp = await fetch("/api/backgrounds");
+  if (!resp.ok) return [];
+  const data = await resp.json();
+  return data.backgrounds ?? [];
+}
+
+// ── Layout content (for editing) ──
+
+export async function fetchLayoutContent(name: string): Promise<string> {
+  const resp = await fetch(`/api/layouts/${encodeURIComponent(name)}`);
+  if (!resp.ok) throw new Error(`Layout '${name}' not found`);
+  const data = await resp.json();
+  return data.content;
+}
+
+export async function saveLayoutContent(name: string, content: string): Promise<void> {
+  const resp = await fetch(`/api/layouts/${encodeURIComponent(name)}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ content }),
+  });
+  if (!resp.ok) throw new Error("Failed to save layout");
 }

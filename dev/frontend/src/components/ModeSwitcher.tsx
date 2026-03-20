@@ -28,7 +28,7 @@ const MODE_DESCRIPTIONS: Record<Mode, string> = {
 export default function ModeSwitcher({ open, onClose, onSwitched }: ModeSwitcherProps) {
   const [current, setCurrent] = useState<ModeInfo | null>(null);
   const [selectedMode, setSelectedMode] = useState<Mode>("general");
-  const [projects, setProjects] = useState<string[]>([]);
+  const [projects, setProjects] = useState<{ name: string; files: string[] }[]>([]);
   const [project, setProject] = useState("");
   const [saving, setSaving] = useState(false);
 
@@ -91,7 +91,7 @@ export default function ModeSwitcher({ open, onClose, onSwitched }: ModeSwitcher
                 >
                   <option value="">Select or type new...</option>
                   {projects.map((p) => (
-                    <option key={p} value={p}>{p}</option>
+                    <option key={p.name} value={p.name}>{p.name}</option>
                   ))}
                 </select>
                 <input

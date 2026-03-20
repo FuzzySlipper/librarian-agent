@@ -1,6 +1,23 @@
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useMemo } from "react";
 import ReactMarkdown from "react-markdown";
 import type { Message, Mode } from "../types";
+
+/** Wrap "quoted dialogue" in spans so the CSS text theme can color them. */
+function renderDialogue(text: string): React.ReactNode[] {
+  const parts: React.ReactNode[] = [];
+  const re = /\u201c[^\u201d]*\u201d|"[^"]*"/g;
+  let last = 0;
+  let match: RegExpExecArray | null;
+  while ((match = re.exec(text)) !== null) {
+    if (match.index > last) parts.push(text.slice(last, match.index));
+    parts.push(
+      <span key={match.index} className="dialogue">{match[0]}</span>,
+    );
+    last = match.index + match[0].length;
+  }
+  if (last < text.length) parts.push(text.slice(last));
+  return parts;
+}
 
 interface MessageBubbleProps {
   message: Message;
@@ -25,6 +42,21 @@ export default function MessageBubble({ message, index, mode, onEdit, onRetry, o
   const variantCount = message.variants?.length ?? 1;
 
   const showPortrait = mode === "roleplay" && !isUser && message.portrait;
+  const showUserPortrait = mode === "roleplay" && isUser && message.userPortrait;
+
+  // Custom ReactMarkdown components to colorize quoted dialogue
+  const mdComponents = useMemo(() => ({
+    p: ({ children }: { children?: React.ReactNode }) => {
+      const mapped = Array.isArray(children)
+        ? children.map((child, i) =>
+            typeof child === "string" ? <span key={i}>{renderDialogue(child)}</span> : child,
+          )
+        : typeof children === "string"
+          ? renderDialogue(children)
+          : children;
+      return <p>{mapped}</p>;
+    },
+  }), []);
 
   useEffect(() => {
     if (editing && textareaRef.current) {
@@ -147,8 +179,8 @@ export default function MessageBubble({ message, index, mode, onEdit, onRetry, o
         </div>
       ) : (
         <>
-          <div className="prose prose-invert prose-sm max-w-none [&_p]:mb-2 [&_p:last-child]:mb-0">
-            <ReactMarkdown>{message.content}</ReactMarkdown>
+          <div className="prose prose-invert prose-sm prose-themed max-w-none [&_p]:mb-2 [&_p:last-child]:mb-0">
+            <ReactMarkdown components={mdComponents}>{message.content}</ReactMarkdown>
           </div>
 
           {hasVariants && onSwipe && (
@@ -205,6 +237,22 @@ export default function MessageBubble({ message, index, mode, onEdit, onRetry, o
         <div className="flex-1 min-w-0">
           {bubbleContent}
         </div>
+      </div>
+    );
+  }
+
+  // User message with portrait: right-aligned IM layout
+  if (showUserPortrait) {
+    return (
+      <div className="flex gap-3 items-start justify-end">
+        <div className="flex-1 min-w-0 flex justify-end">
+          {bubbleContent}
+        </div>
+        <img
+          src={message.userPortrait!}
+          alt=""
+          className="w-10 h-10 rounded-full object-cover shrink-0 mt-1 ring-1 ring-border"
+        />
       </div>
     );
   }

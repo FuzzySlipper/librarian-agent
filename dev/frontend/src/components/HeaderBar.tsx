@@ -12,6 +12,9 @@ interface HeaderBarProps {
   onOpenProviders: () => void;
   onNewSession: () => void;
   onOpenSessions: () => void;
+  onOpenCharacters: () => void;
+  onOpenTextTheme: () => void;
+  textThemeName: string;
 }
 
 function LabeledBtn({ label, onClick, title, children }: {
@@ -31,7 +34,7 @@ function LabeledBtn({ label, onClick, title, children }: {
   );
 }
 
-export default function HeaderBar({ status, layoutName, onOpenProfile, onOpenMode, onOpenContext, onOpenLore, onOpenPrompts, onOpenLayout, onOpenProviders, onNewSession, onOpenSessions }: HeaderBarProps) {
+export default function HeaderBar({ status, layoutName, onOpenProfile, onOpenMode, onOpenContext, onOpenLore, onOpenPrompts, onOpenLayout, onOpenProviders, onNewSession, onOpenSessions, onOpenCharacters, onOpenTextTheme, textThemeName }: HeaderBarProps) {
   const ready = status?.status === "ready";
 
   return (
@@ -57,6 +60,8 @@ export default function HeaderBar({ status, layoutName, onOpenProfile, onOpenMod
             <LabeledBtn label="lore" onClick={onOpenLore} title="Browse lore files">{status.lore_files} files</LabeledBtn>
             <LabeledBtn label="context" onClick={onOpenContext} title="Context usage">ctx</LabeledBtn>
             <LabeledBtn label="prompts" onClick={onOpenPrompts} title="Browse persona prompts">prompts</LabeledBtn>
+            <LabeledBtn label="characters" onClick={onOpenCharacters} title="Character cards">chars</LabeledBtn>
+            <LabeledBtn label="text" onClick={onOpenTextTheme} title="Text color theme">{textThemeName.toLowerCase()}</LabeledBtn>
             <LabeledBtn label="layout" onClick={onOpenLayout} title="Switch layout">{layoutName}</LabeledBtn>
             <LabeledBtn label="model" onClick={onOpenProviders} title="Configure AI providers">
               {status.model.split("-").slice(0, 2).join("-")}

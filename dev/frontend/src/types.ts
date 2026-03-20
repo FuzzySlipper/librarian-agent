@@ -14,8 +14,10 @@ export interface Message {
   content: string;
   responseType?: string;
   timestamp: number;
-  /** Portrait URL for this message (roleplay mode). */
+  /** Portrait URL for assistant messages (roleplay mode). */
   portrait?: string | null;
+  /** Portrait URL for user messages (roleplay mode). */
+  userPortrait?: string | null;
   /** Reasoning/thinking content from the model (e.g. DeepSeek reasoning). */
   reasoning?: string | null;
   /** Alternative responses (for swipe). Index 0 is the original. */
@@ -54,8 +56,13 @@ export interface ModeInfo {
   pending_content: boolean;
 }
 
+export interface ProjectEntry {
+  name: string;
+  files: string[];
+}
+
 export interface ProjectList {
   mode: string;
   directory: string;
-  projects: string[];
+  projects: ProjectEntry[];
 }

@@ -22,6 +22,10 @@ import PromptBrowser from "./components/PromptBrowser";
 import LayoutPicker from "./components/LayoutPicker";
 import ProviderManager from "./components/ProviderManager";
 import SessionBrowser from "./components/SessionBrowser";
+import CharacterCards from "./components/CharacterCards";
+import TextThemePicker from "./components/TextThemePicker";
+import * as textTheme from "./textTheme";
+import type { TextTheme } from "./textTheme";
 
 /** uuid() requires a secure context (HTTPS); fall back for plain HTTP. */
 const uuid = (): string =>
@@ -37,6 +41,7 @@ function App() {
   const [status, setStatus] = useState<Status | null>(null);
   const [mode, setMode] = useState<Mode>("general");
   const [layout, setLayout] = useState<LayoutConfig>(layoutManager.getLayout());
+  const [backgroundImage, setBackgroundImage] = useState<string | null>(layoutManager.getBackground());
   const [artifact, setArtifact] = useState<Artifact | null>(null);
   const [hasPending, setHasPending] = useState(false);
   const [sending, setSending] = useState(false);
@@ -49,6 +54,10 @@ function App() {
   const [layoutOpen, setLayoutOpen] = useState(false);
   const [providerOpen, setProviderOpen] = useState(false);
   const [sessionsOpen, setSessionsOpen] = useState(false);
+  const [charactersOpen, setCharactersOpen] = useState(false);
+  const [textThemeOpen, setTextThemeOpen] = useState(false);
+  const [portraits, setPortraits] = useState<{ filename: string; url: string }[]>([]);
+  const [currentTextTheme, setCurrentTextTheme] = useState<TextTheme>(textTheme.getTheme());
   const abortRef = useRef<AbortController | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   // When true, the next response will be added as a variant to the last assistant message
@@ -68,7 +77,10 @@ function App() {
 
   useEffect(() => {
     tts.init();
+    textTheme.init();
+    textTheme.setOnChange(setCurrentTextTheme);
     layoutManager.setOnLayoutChange(setLayout);
+    layoutManager.setOnBackgroundChange(setBackgroundImage);
     artifactManager.setOnArtifactChange(setArtifact);
     artifactManager.init();
 
@@ -85,6 +97,10 @@ function App() {
       });
     getMode()
       .then((m) => setHasPending(m.pending_content))
+      .catch(() => {});
+    fetch("/api/portraits")
+      .then((r) => r.json())
+      .then((d) => setPortraits(d.portraits ?? []))
       .catch(() => {});
   }, []);
 
@@ -223,6 +239,17 @@ function App() {
             );
             if (reasoning) {
               msg.reasoning = reasoning;
+            }
+            // Apply user portrait to the preceding user message
+            const userPortrait = event.data.user_portrait as string | null | undefined;
+            if (userPortrait) {
+              setMessages((prev) =>
+                prev.map((m, i) => {
+                  // Find the last user message
+                  const isLastUser = m.role === "user" && !prev.slice(i + 1).some((n) => n.role === "user");
+                  return isLastUser ? { ...m, userPortrait } : m;
+                }),
+              );
             }
             addResponseMessage(
               msg.content,
@@ -450,6 +477,9 @@ function App() {
         onOpenLayout={() => setLayoutOpen(true)}
         onOpenProviders={() => setProviderOpen(true)}
         onOpenSessions={() => setSessionsOpen(true)}
+        onOpenCharacters={() => setCharactersOpen(true)}
+        onOpenTextTheme={() => setTextThemeOpen(true)}
+        textThemeName={currentTextTheme.name}
         onNewSession={async () => {
           await newSession();
           setMessages([]);
@@ -551,6 +581,17 @@ function App() {
         onClose={() => setProviderOpen(false)}
         onChanged={refreshStatus}
       />
+      <CharacterCards
+        open={charactersOpen}
+        onClose={() => setCharactersOpen(false)}
+        onChanged={refreshStatus}
+        portraits={portraits}
+      />
+      <TextThemePicker
+        open={textThemeOpen}
+        onClose={() => setTextThemeOpen(false)}
+        onChanged={() => setCurrentTextTheme(textTheme.getTheme())}
+      />
       <SessionBrowser
         open={sessionsOpen}
         onClose={() => setSessionsOpen(false)}
@@ -571,7 +612,7 @@ function App() {
   );
 
   return (
-    <LayoutShell layout={layout} chatContent={chatContent} artifact={artifact} />
+    <LayoutShell layout={layout} chatContent={chatContent} artifact={artifact} backgroundImage={backgroundImage} />
   );
 }
 

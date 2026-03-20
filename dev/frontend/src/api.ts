@@ -265,6 +265,88 @@ export async function writePersona(path: string, content: string): Promise<unkno
   });
 }
 
+// ── Writing styles ──
+
+export interface WritingStyleInfo {
+  path: string;
+  name: string;
+  tokens: number;
+  size: number;
+}
+
+export async function listWritingStyles(): Promise<{ files: WritingStyleInfo[]; active: string }> {
+  return request("/api/writing-styles");
+}
+
+export async function readWritingStyle(name: string): Promise<{ name: string; content: string; tokens: number }> {
+  return request(`/api/writing-styles/${encodeURIComponent(name)}`);
+}
+
+export async function writeWritingStyle(name: string, content: string): Promise<unknown> {
+  return request(`/api/writing-styles/${encodeURIComponent(name)}`, {
+    method: "PUT",
+    body: JSON.stringify({ content }),
+  });
+}
+
+// ── Character cards ──
+
+export interface CharacterCardSummary {
+  filename: string;
+  name: string;
+  portrait: string | null;
+}
+
+export interface CharacterCard {
+  name: string;
+  portrait: string;
+  personality: string;
+  description: string;
+  scenario: string;
+  greeting: string;
+  _filename?: string;
+}
+
+export async function listCharacterCards(): Promise<{
+  cards: CharacterCardSummary[];
+  active_ai: string | null;
+  active_user: string | null;
+}> {
+  return request("/api/character-cards");
+}
+
+export async function readCharacterCard(name: string): Promise<CharacterCard> {
+  return request(`/api/character-cards/${encodeURIComponent(name)}`);
+}
+
+export async function createCharacterCard(card: Omit<CharacterCard, "_filename">): Promise<{ status: string; filename: string }> {
+  return request("/api/character-cards", {
+    method: "POST",
+    body: JSON.stringify(card),
+  });
+}
+
+export async function updateCharacterCard(name: string, card: Omit<CharacterCard, "_filename">): Promise<unknown> {
+  return request(`/api/character-cards/${encodeURIComponent(name)}`, {
+    method: "PUT",
+    body: JSON.stringify(card),
+  });
+}
+
+export async function deleteCharacterCard(name: string): Promise<unknown> {
+  return request(`/api/character-cards/${encodeURIComponent(name)}`, { method: "DELETE" });
+}
+
+export async function activateCharacterCards(config: {
+  ai_character?: string | null;
+  user_character?: string | null;
+}): Promise<unknown> {
+  return request("/api/character-cards/activate", {
+    method: "POST",
+    body: JSON.stringify(config),
+  });
+}
+
 // ── Provider management ──
 
 export interface ProviderInfo {

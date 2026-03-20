@@ -305,7 +305,7 @@ You are in roleplay/chat mode. The user is engaged in an interactive narrative.
 
 Current chat: {project_name}
 Current file: {current_file}
-
+{character_section}
 The user sends messages as their character or describes actions. Your workflow:
 1. Use write_prose to generate the response/continuation
 2. The generated text is automatically appended to the chat file
@@ -543,6 +543,27 @@ class Orchestrator:
         log.info("Persona loaded: %d tokens across %d tiers", total_tokens, len(sections))
         return "\n\n".join(sections)
 
+    def _build_character_section(self) -> str:
+        """Build the character card section for roleplay mode."""
+        from src.character_cards import load_card, card_to_prompt
+        parts = []
+
+        ai_name = self.config.roleplay.ai_character
+        if ai_name:
+            card = load_card(self.config.paths.character_cards / f"{ai_name}.yaml")
+            if card:
+                parts.append(f"\n## Your Character\nYou are playing the following character:\n{card_to_prompt(card)}")
+                if card.get("greeting") and not self.conversation_history:
+                    parts.append(f"\nUse this as your opening message if starting a new conversation:\n{card['greeting']}")
+
+        user_name = self.config.roleplay.user_character
+        if user_name:
+            card = load_card(self.config.paths.character_cards / f"{user_name}.yaml")
+            if card:
+                parts.append(f"\n## The User's Character\nThe user is playing:\n{card_to_prompt(card)}")
+
+        return "\n".join(parts)
+
     # ── System prompt building ────────────────────────────────────────
 
     def _build_system_prompt(self) -> str:
@@ -575,10 +596,12 @@ class Orchestrator:
                 if file_content
                 else "## Current Chat Contents:\n\n(empty — new conversation)"
             )
+            character_section = self._build_character_section()
             parts.append(ROLEPLAY_MODE_PROMPT.format(
                 project_name=self.active_project or "(none)",
                 current_file=self.active_file or "(none)",
                 file_context=file_context,
+                character_section=character_section,
             ))
 
         elif self.mode == Mode.FORGE:
