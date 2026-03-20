@@ -1,14 +1,11 @@
-"""Adapter that wraps an OpenAI client to present an Anthropic-compatible interface.
+"""OpenAI-compatible LLM client implementation.
 
-This lets agents written against the Anthropic SDK (client.messages.create)
-work transparently with OpenAI-compatible providers (OpenAI, DeepSeek, local LLMs, etc).
+Wraps any OpenAI-compatible API (OpenAI, DeepSeek, local LLMs, etc.) to present
+the unified LLMClient interface. Translates tool definitions, messages, and
+responses between the internal Anthropic-style format and OpenAI's format.
 
-Translates:
-- Tool definitions: Anthropic {name, input_schema} -> OpenAI {type: "function", function: {name, parameters}}
-- System prompts: Anthropic system= kwarg -> OpenAI system message
-- Messages: Anthropic tool_result blocks -> OpenAI tool messages
-- Responses: OpenAI ChatCompletion -> Anthropic-shaped response objects
-- Provider quirks: DeepSeek reasoning_content, empty required arrays, etc.
+Handles provider quirks (DeepSeek reasoning_content, empty required arrays, etc.)
+via ProviderOptions.
 """
 
 from __future__ import annotations
@@ -16,48 +13,16 @@ from __future__ import annotations
 import json
 import logging
 import re
-from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import openai
+
+from src.llm import LLMClient, LLMResponse, TextBlock, ToolUseBlock, Usage
 
 if TYPE_CHECKING:
     from src.providers import ProviderOptions
 
 log = logging.getLogger(__name__)
-
-
-# ── Response shim objects ─────────────────────────────────────────────
-# These mimic anthropic.types.Message and its content blocks so that
-# existing agent code (response.stop_reason, response.content, block.type,
-# block.text, block.id, block.input, response.usage) works unchanged.
-
-@dataclass
-class TextBlock:
-    type: str = "text"
-    text: str = ""
-
-
-@dataclass
-class ToolUseBlock:
-    type: str = "tool_use"
-    id: str = ""
-    name: str = ""
-    input: dict = field(default_factory=dict)
-
-
-@dataclass
-class Usage:
-    input_tokens: int = 0
-    output_tokens: int = 0
-
-
-@dataclass
-class AnthropicLikeResponse:
-    content: list = field(default_factory=list)
-    stop_reason: str = "end_turn"
-    usage: Usage = field(default_factory=Usage)
-    reasoning: str | None = None  # Reasoning/thinking content from the model
 
 
 # ── Translation helpers ──────────────────────────────────────────────
@@ -91,7 +56,6 @@ def _system_to_string(system) -> str:
     if isinstance(system, str):
         return system
     if isinstance(system, list):
-        # List of content blocks — extract text, drop cache_control etc.
         parts = []
         for block in system:
             if isinstance(block, dict) and block.get("type") == "text":
@@ -124,11 +88,9 @@ def _convert_messages(messages: list[dict], system_text: str,
         content = msg["content"]
 
         if role == "user":
-            # Could be a string or a list of tool_result blocks
             if isinstance(content, str):
                 result.append({"role": "user", "content": content})
             elif isinstance(content, list):
-                # Check if it's tool results
                 if content and isinstance(content[0], dict) and content[0].get("type") == "tool_result":
                     for block in content:
                         result.append({
@@ -137,7 +99,6 @@ def _convert_messages(messages: list[dict], system_text: str,
                             "content": block.get("content", ""),
                         })
                 else:
-                    # Mixed content blocks — extract text
                     text_parts = []
                     for block in content:
                         if isinstance(block, dict):
@@ -153,11 +114,9 @@ def _convert_messages(messages: list[dict], system_text: str,
             if isinstance(content, str):
                 result.append({"role": "assistant", "content": content})
             elif isinstance(content, list):
-                # Anthropic assistant content is a list of TextBlock / ToolUseBlock
                 text_parts = []
                 tool_calls = []
                 for block in content:
-                    # Could be dataclass objects or dicts
                     if hasattr(block, "type"):
                         btype = block.type
                     elif isinstance(block, dict):
@@ -187,9 +146,10 @@ def _convert_messages(messages: list[dict], system_text: str,
                     msg_dict["content"] = None
                 if tool_calls:
                     msg_dict["tool_calls"] = tool_calls
-                    # DeepSeek reasoner models require reasoning_content on
-                    # assistant messages that have tool_calls
-                    if add_reasoning_content:
+                    stored_reasoning = msg.get("reasoning")
+                    if stored_reasoning is not None:
+                        msg_dict["reasoning_content"] = stored_reasoning
+                    elif add_reasoning_content:
                         msg_dict["reasoning_content"] = ""
                 result.append(msg_dict)
         else:
@@ -198,17 +158,15 @@ def _convert_messages(messages: list[dict], system_text: str,
     return result
 
 
-def _openai_response_to_anthropic(response) -> AnthropicLikeResponse:
-    """Convert an OpenAI ChatCompletion response to an Anthropic-like response."""
+def _convert_response(response) -> LLMResponse:
+    """Convert an OpenAI ChatCompletion response to our unified LLMResponse."""
     choice = response.choices[0]
     message = choice.message
     content = []
 
-    # Text content
     if message.content:
         content.append(TextBlock(text=message.content))
 
-    # Tool calls
     if message.tool_calls:
         for tc in message.tool_calls:
             try:
@@ -221,7 +179,6 @@ def _openai_response_to_anthropic(response) -> AnthropicLikeResponse:
                 input=args,
             ))
 
-    # Map finish_reason
     finish_reason = choice.finish_reason
     if finish_reason == "tool_calls":
         stop_reason = "tool_use"
@@ -237,30 +194,28 @@ def _openai_response_to_anthropic(response) -> AnthropicLikeResponse:
         output_tokens=getattr(response.usage, "completion_tokens", 0) if response.usage else 0,
     )
 
-    # Capture reasoning content (DeepSeek, etc.)
     reasoning = getattr(message, "reasoning_content", None)
 
-    return AnthropicLikeResponse(content=content, stop_reason=stop_reason, usage=usage, reasoning=reasoning)
+    return LLMResponse(content=content, stop_reason=stop_reason, usage=usage, reasoning=reasoning)
 
 
-def _openai_stream_to_anthropic(stream):
+def _stream_response(stream):
     """Consume an OpenAI streaming response as a generator.
 
     Yields dicts:
       {"type": "text_delta", "text": "..."} — partial text
       {"type": "reasoning_delta", "text": "..."} — partial reasoning
-      {"type": "done", "response": AnthropicLikeResponse} — final assembled response
+      {"type": "done", "response": LLMResponse} — final assembled response
     """
     text_parts = []
     reasoning_parts = []
-    tool_calls_data: dict[int, dict] = {}  # index -> {id, name, arguments}
+    tool_calls_data: dict[int, dict] = {}
     finish_reason = None
     usage_prompt = 0
     usage_completion = 0
 
     for chunk in stream:
         if not chunk.choices:
-            # Usage-only chunk at the end
             if chunk.usage:
                 usage_prompt = getattr(chunk.usage, "prompt_tokens", 0)
                 usage_completion = getattr(chunk.usage, "completion_tokens", 0)
@@ -269,18 +224,15 @@ def _openai_stream_to_anthropic(stream):
         delta = chunk.choices[0].delta
         finish_reason = chunk.choices[0].finish_reason or finish_reason
 
-        # Text content
         if delta.content:
             text_parts.append(delta.content)
             yield {"type": "text_delta", "text": delta.content}
 
-        # Reasoning content (DeepSeek)
         reasoning_content = getattr(delta, "reasoning_content", None)
         if reasoning_content:
             reasoning_parts.append(reasoning_content)
             yield {"type": "reasoning_delta", "text": reasoning_content}
 
-        # Tool calls (accumulated across chunks)
         if delta.tool_calls:
             for tc_delta in delta.tool_calls:
                 idx = tc_delta.index
@@ -323,7 +275,7 @@ def _openai_stream_to_anthropic(stream):
 
     reasoning = "".join(reasoning_parts) if reasoning_parts else None
 
-    response = AnthropicLikeResponse(
+    response = LLMResponse(
         content=content,
         stop_reason=stop_reason,
         usage=Usage(input_tokens=usage_prompt, output_tokens=usage_completion),
@@ -338,40 +290,37 @@ _DEEPSEEK_REASONER_RE = re.compile(r"-reasoner\b", re.IGNORECASE)
 
 
 def _should_add_reasoning_content(option_value: bool | str, model: str) -> bool:
-    """Decide whether to add reasoning_content based on option and model name."""
     if option_value is True:
         return True
     if option_value is False:
         return False
-    # "auto" — detect from model name
     return bool(_DEEPSEEK_REASONER_RE.search(model))
 
 
 def _should_strip_empty_required(option_value: bool | str, model: str) -> bool:
-    """Decide whether to strip empty required arrays."""
     if option_value is True:
         return True
     if option_value is False:
         return False
-    # "auto" — enable for DeepSeek models (base_url or model name hint)
     return "deepseek" in model.lower()
 
 
-# ── Adapter class ────────────────────────────────────────────────────
+# ── Client class ─────────────────────────────────────────────────────
 
-class _MessagesNamespace:
-    """Mimics client.messages.create() using an OpenAI client underneath."""
+class OpenAIClient(LLMClient):
+    """LLMClient backed by any OpenAI-compatible API."""
 
-    def __init__(self, openai_client: openai.OpenAI, options: ProviderOptions | None = None):
-        self._client = openai_client
+    def __init__(self, client: openai.OpenAI | None = None,
+                 options: ProviderOptions | None = None, **kwargs):
+        self._client = client or openai.OpenAI(**kwargs)
         self._options = options
 
-    def create(self, *, model: str, max_tokens: int, system=None,
-               messages: list[dict], tools: list[dict] | None = None,
-               **kwargs) -> AnthropicLikeResponse:
+    def _build_call_kwargs(self, *, model: str, max_tokens: int, system,
+                           messages: list[dict], tools: list[dict] | None,
+                           stream: bool = False) -> dict[str, Any]:
+        """Build the kwargs dict for chat.completions.create."""
         opts = self._options
 
-        # Resolve quirks
         add_reasoning = _should_add_reasoning_content(
             opts.reasoning_content if opts else "auto", model)
         strip_required = _should_strip_empty_required(
@@ -382,15 +331,16 @@ class _MessagesNamespace:
                                          add_reasoning_content=add_reasoning)
         oai_tools = _anthropic_tools_to_openai(tools, strip_empty_required=strip_required)
 
-        call_kwargs: dict = {
+        call_kwargs: dict[str, Any] = {
             "model": model,
             "max_tokens": max_tokens,
             "messages": oai_messages,
         }
+        if stream:
+            call_kwargs["stream"] = True
         if oai_tools:
             call_kwargs["tools"] = oai_tools
 
-        # Apply sampling parameters from provider options
         if opts:
             if opts.temperature is not None:
                 call_kwargs["temperature"] = opts.temperature
@@ -402,69 +352,25 @@ class _MessagesNamespace:
                 call_kwargs["presence_penalty"] = opts.presence_penalty
             if opts.seed is not None:
                 call_kwargs["seed"] = opts.seed
-
-            # Extra body for provider-specific params not covered above
             if opts.extra_body:
                 call_kwargs["extra_body"] = opts.extra_body
 
-        response = self._client.chat.completions.create(**call_kwargs)
-        return _openai_response_to_anthropic(response)
+        return call_kwargs
 
-    def create_stream(self, *, model: str, max_tokens: int, system=None,
+    def create(self, *, model: str, max_tokens: int, system: Any = None,
+               messages: list[dict], tools: list[dict] | None = None,
+               **kwargs) -> LLMResponse:
+        call_kwargs = self._build_call_kwargs(
+            model=model, max_tokens=max_tokens, system=system,
+            messages=messages, tools=tools)
+        response = self._client.chat.completions.create(**call_kwargs)
+        return _convert_response(response)
+
+    def create_stream(self, *, model: str, max_tokens: int, system: Any = None,
                       messages: list[dict], tools: list[dict] | None = None,
                       **kwargs):
-        """Streaming version of create(). Returns a generator that yields:
-          {"type": "text_delta", "text": "..."}
-          {"type": "reasoning_delta", "text": "..."}
-          {"type": "done", "response": AnthropicLikeResponse}
-        """
-        opts = self._options
-
-        add_reasoning = _should_add_reasoning_content(
-            opts.reasoning_content if opts else "auto", model)
-        strip_required = _should_strip_empty_required(
-            opts.strip_empty_required if opts else "auto", model)
-
-        system_text = _system_to_string(system)
-        oai_messages = _convert_messages(messages, system_text,
-                                         add_reasoning_content=add_reasoning)
-        oai_tools = _anthropic_tools_to_openai(tools, strip_empty_required=strip_required)
-
-        call_kwargs: dict = {
-            "model": model,
-            "max_tokens": max_tokens,
-            "messages": oai_messages,
-            "stream": True,
-        }
-        if oai_tools:
-            call_kwargs["tools"] = oai_tools
-
-        if opts:
-            if opts.temperature is not None:
-                call_kwargs["temperature"] = opts.temperature
-            if opts.top_p is not None:
-                call_kwargs["top_p"] = opts.top_p
-            if opts.frequency_penalty is not None:
-                call_kwargs["frequency_penalty"] = opts.frequency_penalty
-            if opts.presence_penalty is not None:
-                call_kwargs["presence_penalty"] = opts.presence_penalty
-            if opts.seed is not None:
-                call_kwargs["seed"] = opts.seed
-            if opts.extra_body:
-                call_kwargs["extra_body"] = opts.extra_body
-
+        call_kwargs = self._build_call_kwargs(
+            model=model, max_tokens=max_tokens, system=system,
+            messages=messages, tools=tools, stream=True)
         stream = self._client.chat.completions.create(**call_kwargs)
-        yield from _openai_stream_to_anthropic(stream)
-
-
-class OpenAIAdapter:
-    """Wraps an openai.OpenAI client to look like anthropic.Anthropic.
-
-    Usage:
-        adapter = OpenAIAdapter(openai_client)
-        adapter.messages.create(model=..., ...)  # works like Anthropic
-    """
-
-    def __init__(self, client: openai.OpenAI, options: ProviderOptions | None = None):
-        self._client = client
-        self.messages = _MessagesNamespace(client, options=options)
+        yield from _stream_response(stream)

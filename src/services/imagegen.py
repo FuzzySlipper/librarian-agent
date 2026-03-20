@@ -28,7 +28,7 @@ import requests
 log = logging.getLogger(__name__)
 
 # Where generated images get saved
-OUTPUT_DIR = Path("generated-images")
+OUTPUT_DIR = Path(os.environ.get("IMAGE_OUTPUT_DIR", "build/generated-images"))
 
 
 @dataclass

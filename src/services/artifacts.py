@@ -10,13 +10,14 @@ Output is stored in a separate MD file and never enters conversation history.
 """
 
 import logging
+import os
 from datetime import datetime
 from pathlib import Path
 
 log = logging.getLogger(__name__)
 
 # Where artifact files are stored
-ARTIFACTS_DIR = Path("artifacts")
+ARTIFACTS_DIR = Path(os.environ.get("ARTIFACTS_DIR", "build/artifacts"))
 
 # Current active artifact (displayed in panel)
 _current_artifact: dict | None = None

@@ -119,7 +119,7 @@ async def lifespan(app: FastAPI):
         log.info("Portraits directory mounted: %s", portraits_dir)
 
     # Mount generated-images directory for serving generated images
-    gen_images_dir = Path("generated-images")
+    gen_images_dir = Path(os.environ.get("IMAGE_OUTPUT_DIR", "build/generated-images"))
     gen_images_dir.mkdir(exist_ok=True)
     app.mount("/generated-images", StaticFiles(directory=str(gen_images_dir)), name="generated-images")
     log.info("Generated images directory mounted: %s", gen_images_dir)
@@ -324,7 +324,10 @@ async def switch_profile(request: ProfileRequest):
     if request.writing_style is not None:
         _config.writing_style.active = request.writing_style
 
-    # Reinitialize agents with new profile
+    # Persist and reinitialize
+    config_path = Path(os.environ.get("CONFIG_PATH", "build/config.yaml"))
+    _save_config_yaml(config_path, _config)
+
     loop = asyncio.get_event_loop()
     await loop.run_in_executor(None, _reinitialize_agents)
 
@@ -536,27 +539,36 @@ async def list_portraits():
 
 @app.get("/api/lore")
 async def list_lore():
-    """List all lore files."""
+    """List all lore files and categories for the active lore project."""
     if _config is None:
         return JSONResponse(status_code=503, content={"error": "System not initialized"})
 
     lore_path = Path(_config.active_lore_path)
     if not lore_path.exists():
-        return {"files": []}
+        return {"files": [], "categories": [], "active_project": _config.lore.active}
 
     files = []
     for p in sorted(lore_path.rglob("*.md")):
         rel = str(p.relative_to(lore_path))
         try:
             content = p.read_text(encoding="utf-8")
-            # Rough token estimate
             tokens = len(content) // 4
         except Exception:
             content = ""
             tokens = 0
         files.append({"path": rel, "tokens": tokens, "size": len(content)})
 
-    return {"files": files, "lore_path": str(lore_path)}
+    # Include all subdirectories (even empty ones) so UI can show them
+    categories = sorted(
+        d.name for d in lore_path.iterdir() if d.is_dir()
+    )
+
+    return {
+        "files": files,
+        "categories": categories,
+        "active_project": _config.lore.active,
+        "lore_path": str(lore_path),
+    }
 
 
 @app.get("/api/lore/{file_path:path}")
@@ -609,6 +621,96 @@ async def write_lore(file_path: str, request: LoreWriteRequest):
     await loop.run_in_executor(None, _reinitialize_agents)
 
     return {"status": "ok", "path": file_path, "tokens": len(request.content) // 4}
+
+
+@app.delete("/api/lore/{file_path:path}")
+async def delete_lore_file(file_path: str):
+    """Delete a lore file. Reinitializes agents."""
+    global _orchestrator
+
+    if _config is None:
+        return JSONResponse(status_code=503, content={"error": "System not initialized"})
+
+    lore_path = Path(_config.active_lore_path)
+    resolved = (lore_path / file_path).resolve()
+
+    try:
+        resolved.relative_to(lore_path.resolve())
+    except ValueError:
+        return JSONResponse(status_code=403, content={"error": "Invalid path"})
+
+    if not resolved.exists():
+        return JSONResponse(status_code=404, content={"error": "File not found"})
+
+    resolved.unlink()
+
+    loop = asyncio.get_event_loop()
+    await loop.run_in_executor(None, _reinitialize_agents)
+
+    return {"status": "ok", "path": file_path}
+
+
+_LORE_DEFAULT_CATEGORIES = ["characters", "locations", "events", "factions"]
+
+
+class LoreProjectRequest(BaseModel):
+    name: str
+
+
+@app.post("/api/lore/projects")
+async def create_lore_project(request: LoreProjectRequest):
+    """Create a new lore project with standard directory structure."""
+    global _orchestrator
+
+    if _config is None:
+        return JSONResponse(status_code=503, content={"error": "System not initialized"})
+
+    # Sanitize name
+    name = request.name.strip().lower().replace(" ", "-")
+    name = "".join(c for c in name if c.isalnum() or c in "-_")
+    if not name:
+        return JSONResponse(status_code=400, content={"error": "Invalid project name"})
+
+    project_dir = _config.paths.lore / name
+    if project_dir.exists():
+        return JSONResponse(status_code=409, content={"error": "Project already exists"})
+
+    project_dir.mkdir(parents=True, exist_ok=True)
+    for subdir in _LORE_DEFAULT_CATEGORIES:
+        (project_dir / subdir).mkdir(exist_ok=True)
+
+    # Create starter world-overview.md
+    overview = project_dir / "world-overview.md"
+    overview.write_text(
+        "# World Overview\n\n"
+        "Describe your world, setting, tone, and themes here.\n",
+        encoding="utf-8",
+    )
+
+    # Activate the new project
+    _config.lore.active = name
+    config_path = Path(os.environ.get("CONFIG_PATH", "build/config.yaml"))
+    _save_config_yaml(config_path, _config)
+
+    loop = asyncio.get_event_loop()
+    await loop.run_in_executor(None, _reinitialize_agents)
+
+    return {"status": "ok", "name": name}
+
+
+@app.get("/api/lore/projects")
+async def list_lore_projects():
+    """List available lore projects."""
+    if _config is None:
+        return JSONResponse(status_code=503, content={"error": "System not initialized"})
+
+    from src.config import list_profiles
+    profiles = list_profiles(_config)
+
+    return {
+        "projects": profiles["lore_sets"],
+        "active": _config.lore.active or "(default)",
+    }
 
 
 # ── Persona / prompt endpoints ────────────────────────────────────────
@@ -974,6 +1076,10 @@ def _save_config_yaml(config_path: Path, config: AppConfig):
     # Update layout
     raw.setdefault("layout", {})
     raw["layout"]["active"] = config.layout.active
+
+    # Update lore
+    raw.setdefault("lore", {})
+    raw["lore"]["active"] = config.lore.active
 
     with open(config_path, "w") as f:
         yaml.dump(raw, f, default_flow_style=False, sort_keys=False)

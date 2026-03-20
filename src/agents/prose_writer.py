@@ -12,10 +12,9 @@ import os
 import sys
 from pathlib import Path
 
-import anthropic
-
 from src.agents.librarian import Librarian
 from src.config import AppConfig, load_config
+from src.llm import LLMClient
 from src.models import ProseResult
 from src.utils.file_utils import append_to_story
 
@@ -59,12 +58,18 @@ Your job is to write scenes based on the user's description. Follow these rules:
 class ProseWriter:
     """Generates scenes, calling the Librarian automatically via tool use."""
 
-    def __init__(self, librarian: Librarian, config: AppConfig, client=None, model: str | None = None):
+    def __init__(self, librarian: Librarian, config: AppConfig, client: LLMClient | None = None, model: str | None = None):
         self.librarian = librarian
         self.config = config
         self.model = model or config.models.prose_writer
-        self.client = client or anthropic.Anthropic()
+        self.client: LLMClient = client or self._default_client()
         self.writing_style = self._load_writing_style()
+
+    @staticmethod
+    def _default_client() -> LLMClient:
+        from src.llm_anthropic import AnthropicClient
+        import anthropic
+        return AnthropicClient(anthropic.Anthropic())
 
     def _load_writing_style(self) -> str:
         """Load the active writing style from file."""
@@ -91,7 +96,7 @@ class ProseWriter:
 
         # Tool-use loop: model may call query_lore multiple times
         while True:
-            response = self.client.messages.create(
+            response = self.client.create(
                 model=self.model,
                 max_tokens=self.config.prose_writer.max_tokens_per_scene,
                 system=system_prompt,
@@ -166,7 +171,7 @@ class ProseWriter:
             story_context_section=context_section,
         )
 
-    def _extract_text(self, response: anthropic.types.Message) -> str:
+    def _extract_text(self, response) -> str:
         """Extract text content from the final response."""
         parts = []
         for block in response.content:

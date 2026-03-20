@@ -65,6 +65,38 @@ Example:
   "extra_body": {"reasoning": {"effort": "high"}}
 }`;
 
+/** Suggest initial options based on model name patterns. */
+function suggestOptions(model: string, providerType: string): Record<string, unknown> | null {
+  if (!model) return null;
+  const m = model.toLowerCase();
+  const opts: Record<string, unknown> = {};
+
+  // DeepSeek reasoner models need reasoning_content and strip_empty_required
+  if (m.includes("deepseek")) {
+    opts.strip_empty_required = true;
+    if (m.includes("reasoner") || m.includes("r1")) {
+      opts.reasoning_content = true;
+    }
+  }
+
+  // Models with extended thinking / reasoning support
+  if (m.includes("reasoner") || m.includes("-r1") || m.includes("thinking")) {
+    opts.reasoning_content = true;
+  }
+
+  // For OpenAI-compatible providers using reasoning models, add the reasoning effort hint
+  if (providerType === "openai" && (m.includes("o1") || m.includes("o3") || m.includes("o4"))) {
+    opts.extra_body = { reasoning: { effort: "high" } };
+  }
+
+  // Suggest a sensible temperature for creative writing
+  if (Object.keys(opts).length === 0) {
+    opts.temperature = 0.7;
+  }
+
+  return Object.keys(opts).length > 0 ? opts : null;
+}
+
 const TEMPLATES = [
   { label: "Anthropic", type: "anthropic", base_url: "", models_url: "https://api.anthropic.com/v1/models" },
   { label: "OpenAI", type: "openai", base_url: "https://api.openai.com/v1", models_url: "https://api.openai.com/v1/models" },
@@ -364,7 +396,17 @@ export default function ProviderManager({ open, onClose, onChanged }: ProviderMa
 
           <div>
             <button
-              onClick={() => setOptionsOpen(!optionsOpen)}
+              onClick={() => {
+                const opening = !optionsOpen;
+                setOptionsOpen(opening);
+                // Auto-suggest options when opening with blank/empty options
+                if (opening && optionsText.trim() === "{}") {
+                  const suggested = suggestOptions(form.selected_model, form.type);
+                  if (suggested) {
+                    setOptionsText(JSON.stringify(suggested, null, 2));
+                  }
+                }
+              }}
               className="text-xs text-accent hover:text-accent-hover"
             >
               {optionsOpen ? "Hide Options" : "Options"}

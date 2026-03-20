@@ -18,7 +18,9 @@ import requests
 from pydantic import BaseModel
 
 from src.encryption import encrypt, decrypt
-from src.openai_adapter import OpenAIAdapter
+from src.llm import LLMClient
+from src.llm_anthropic import AnthropicClient
+from src.llm_openai import OpenAIClient
 
 log = logging.getLogger(__name__)
 
@@ -237,19 +239,18 @@ class ProviderRegistry:
             return None
         return decrypt(provider.api_key_encrypted, self.data_dir)
 
-    def get_client(self, alias: str) -> anthropic.Anthropic | OpenAIAdapter:
-        """Return a configured API client for the given alias.
+    def get_client(self, alias: str) -> LLMClient:
+        """Return a configured LLMClient for the given alias.
 
-        For OpenAI-type providers, returns an OpenAIAdapter that presents
-        the same .messages.create() interface as anthropic.Anthropic, so
-        agents work unchanged regardless of provider type.
+        Returns AnthropicClient or OpenAIClient depending on provider type.
+        All agents program against the LLMClient interface and never need
+        to know which provider they're using.
         """
         if alias not in self.providers:
-            # Fallback: maybe alias is a raw model ID — use default Anthropic
             log.warning("No provider for alias '%s', falling back to env-based Anthropic client", alias)
-            return anthropic.Anthropic(
+            return AnthropicClient(anthropic.Anthropic(
                 default_headers={"User-Agent": self.user_agent},
-            )
+            ))
 
         p = self.providers[alias]
         api_key = self._decrypt_key(p)
@@ -262,7 +263,7 @@ class ProviderRegistry:
                 kwargs["api_key"] = api_key
             if p.base_url:
                 kwargs["base_url"] = p.base_url
-            return anthropic.Anthropic(**kwargs)
+            return AnthropicClient(anthropic.Anthropic(**kwargs))
         else:
             kwargs: dict[str, Any] = {
                 "default_headers": {"User-Agent": self.user_agent},
@@ -270,10 +271,10 @@ class ProviderRegistry:
             if api_key:
                 kwargs["api_key"] = api_key
             else:
-                kwargs["api_key"] = "not-needed"  # Some local endpoints don't need a key
+                kwargs["api_key"] = "not-needed"
             if p.base_url:
                 kwargs["base_url"] = p.base_url
-            return OpenAIAdapter(openai.OpenAI(**kwargs), options=p.options)
+            return OpenAIClient(openai.OpenAI(**kwargs), options=p.options)
 
     def get_model(self, alias: str) -> str:
         """Return the selected model ID for an alias."""

@@ -207,7 +207,12 @@ export interface LoreFileInfo {
   size: number;
 }
 
-export async function listLore(): Promise<{ files: LoreFileInfo[]; lore_path: string }> {
+export async function listLore(): Promise<{
+  files: LoreFileInfo[];
+  categories: string[];
+  active_project: string | null;
+  lore_path: string;
+}> {
   return request("/api/lore");
 }
 
@@ -219,6 +224,21 @@ export async function writeLore(path: string, content: string): Promise<unknown>
   return request(`/api/lore/${encodeURIComponent(path)}`, {
     method: "PUT",
     body: JSON.stringify({ content }),
+  });
+}
+
+export async function deleteLore(path: string): Promise<unknown> {
+  return request(`/api/lore/${encodeURIComponent(path)}`, { method: "DELETE" });
+}
+
+export async function listLoreProjects(): Promise<{ projects: string[]; active: string }> {
+  return request("/api/lore/projects");
+}
+
+export async function createLoreProject(name: string): Promise<{ status: string; name: string }> {
+  return request("/api/lore/projects", {
+    method: "POST",
+    body: JSON.stringify({ name }),
   });
 }
 

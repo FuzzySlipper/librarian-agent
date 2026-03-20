@@ -16,7 +16,7 @@ import logging
 from pathlib import Path
 from typing import Callable, Generator
 
-import anthropic
+from src.llm import LLMClient
 
 log = logging.getLogger(__name__)
 
@@ -133,7 +133,7 @@ def run_planner(
     prompts_dir: Path,
     model: str,
     stats_callback: Callable | None = None,
-    client=None,
+    client: LLMClient | None = None,
 ) -> Generator[dict, None, None]:
     """Run the planner agent tool-use loop.
 
@@ -151,11 +151,14 @@ def run_planner(
         "then character bios, then chapter briefs."
     )
 
-    client = client or anthropic.Anthropic()
+    if client is None:
+        from src.llm_anthropic import AnthropicClient
+        import anthropic
+        client = AnthropicClient(anthropic.Anthropic())
     messages: list[dict] = [{"role": "user", "content": user_prompt}]
 
     while True:
-        response = client.messages.create(
+        response = client.create(
             model=model,
             max_tokens=16384,
             system=system_prompt,

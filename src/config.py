@@ -142,12 +142,17 @@ def list_profiles(config: AppConfig) -> dict[str, list[str]]:
         if not profiles["personas"] and any(persona_dir.glob("*.md")):
             profiles["personas"].append("(default)")
 
-    # Scan lore directory for subdirectories containing .md files
+    # Scan lore directory for project subdirectories.
+    # A lore project is a subdirectory that contains its own subdirectories
+    # (e.g. characters/, locations/) — not a bare category dir with only .md files.
     lore_dir = config.paths.lore
     if lore_dir.exists():
         for sub in sorted(lore_dir.iterdir()):
-            if sub.is_dir() and (any(sub.glob("*.md")) or any(sub.rglob("*.md"))):
-                profiles["lore_sets"].append(sub.name)
+            if sub.is_dir():
+                has_subdirs = any(s.is_dir() for s in sub.iterdir())
+                has_overview = (sub / "world-overview.md").exists()
+                if has_subdirs or has_overview:
+                    profiles["lore_sets"].append(sub.name)
         if any(lore_dir.glob("*.md")):
             profiles["lore_sets"].insert(0, "(default)")
 

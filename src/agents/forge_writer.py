@@ -9,7 +9,7 @@ import json
 import logging
 from pathlib import Path
 
-import anthropic
+from src.llm import LLMClient
 
 log = logging.getLogger(__name__)
 
@@ -74,7 +74,7 @@ def write_chapter(
     max_tokens: int = 8192,
     revision_feedback: str | None = None,
     previous_draft: str | None = None,
-    client=None,
+    client: LLMClient | None = None,
 ) -> tuple[str, dict]:
     """Write (or revise) a single chapter.
 
@@ -107,7 +107,10 @@ def write_chapter(
 
     user_prompt = "\n\n".join(parts)
 
-    client = client or anthropic.Anthropic()
+    if client is None:
+        from src.llm_anthropic import AnthropicClient
+        import anthropic
+        client = AnthropicClient(anthropic.Anthropic())
     messages: list[dict] = [{"role": "user", "content": user_prompt}]
     lore_queries: list[str] = []
     total_input = 0
@@ -115,7 +118,7 @@ def write_chapter(
     calls = 0
 
     while True:
-        response = client.messages.create(
+        response = client.create(
             model=model,
             max_tokens=max_tokens,
             system=system_prompt,

@@ -13,9 +13,8 @@ import os
 import sys
 from pathlib import Path
 
-import anthropic
-
 from src.config import AppConfig, load_config
+from src.llm import LLMClient
 from src.models import LoreBundle
 from src.utils.file_utils import estimate_tokens, load_lore_files
 
@@ -52,10 +51,10 @@ LORE CORPUS:
 class Librarian:
     """Loads lore files once, answers queries from cached content."""
 
-    def __init__(self, config: AppConfig, client=None, model: str | None = None):
+    def __init__(self, config: AppConfig, client: LLMClient | None = None, model: str | None = None):
         self.config = config
         self.model = model or config.models.librarian
-        self.client = client or anthropic.Anthropic()
+        self.client: LLMClient = client or self._default_client()
         self.lore_path = config.active_lore_path
         self.lore = load_lore_files(self.lore_path)
         self.system_prompt = self._build_system_prompt()
@@ -67,6 +66,12 @@ class Librarian:
             self.lore_path,
             token_est,
         )
+
+    @staticmethod
+    def _default_client() -> LLMClient:
+        from src.llm_anthropic import AnthropicClient
+        import anthropic
+        return AnthropicClient(anthropic.Anthropic())
 
     def _build_system_prompt(self) -> str:
         """Build system prompt with all lore content embedded."""
@@ -81,7 +86,7 @@ class Librarian:
         """Query the lore corpus and return structured results."""
         log.debug("Librarian query: %s", query)
 
-        response = self.client.messages.create(
+        response = self.client.create(
             model=self.model,
             max_tokens=self.config.librarian.max_tokens_per_query,
             system=[{
@@ -93,16 +98,6 @@ class Librarian:
         )
 
         raw_text = response.content[0].text
-
-        # Log cache performance
-        if hasattr(response, "usage"):
-            usage = response.usage
-            cached = getattr(usage, "cache_read_input_tokens", 0)
-            created = getattr(usage, "cache_creation_input_tokens", 0)
-            if cached > 0:
-                log.info("Cache hit: %d tokens read from cache", cached)
-            elif created > 0:
-                log.info("Cache miss: %d tokens written to cache", created)
 
         return self._parse_response(raw_text)
 

@@ -20,14 +20,13 @@ from datetime import datetime
 from enum import Enum
 from pathlib import Path
 
-import anthropic
 import yaml
 
 from src.agents.librarian import Librarian
 from src.agents.prose_writer import ProseWriter, _load_story_context
 from src.config import AppConfig
+from src.llm import LLMClient, LLMResponse
 from src.models import Response
-from src.openai_adapter import OpenAIAdapter
 from src.utils.file_utils import estimate_tokens
 
 log = logging.getLogger(__name__)
@@ -402,7 +401,7 @@ class Orchestrator:
         self.writer = writer
         self.config = config
         self.model = model or config.models.orchestrator
-        self.client = client or anthropic.Anthropic()
+        self.client: LLMClient = client or self._default_client()
         self.persona = self._load_persona()
         self.conversation_history: list[dict] = []
 
@@ -419,6 +418,12 @@ class Orchestrator:
             estimate_tokens(self.persona),
             self.model,
         )
+
+    @staticmethod
+    def _default_client() -> LLMClient:
+        from src.llm_anthropic import AnthropicClient
+        import anthropic
+        return AnthropicClient(anthropic.Anthropic())
 
     # ── Mode management ───────────────────────────────────────────────
 
@@ -625,7 +630,7 @@ class Orchestrator:
 
         # Tool-use loop
         while True:
-            response = self.client.messages.create(
+            response = self.client.create(
                 model=self.model,
                 max_tokens=4096,
                 system=system_prompt,
@@ -638,7 +643,11 @@ class Orchestrator:
                 break
 
             if response.stop_reason == "tool_use":
-                messages.append({"role": "assistant", "content": response.content})
+                asst_msg = {"role": "assistant", "content": response.content}
+                # Preserve reasoning for providers that require it on tool call messages
+                if response.reasoning:
+                    asst_msg["reasoning"] = response.reasoning
+                messages.append(asst_msg)
 
                 tool_results = []
                 for block in response.content:
@@ -676,29 +685,15 @@ class Orchestrator:
         Yields dicts:
           {"type": "text_delta", "text": "..."}
           {"type": "reasoning_delta", "text": "..."}
-          {"type": "done", "response": <AnthropicLikeResponse or anthropic.Message>}
+          {"type": "done", "response": LLMResponse}
         """
-        if isinstance(self.client, OpenAIAdapter):
-            yield from self.client.messages.create_stream(
-                model=self.model,
-                max_tokens=4096,
-                system=system_prompt,
-                messages=messages,
-                tools=tools,
-            )
-        else:
-            # Native Anthropic streaming
-            with self.client.messages.stream(
-                model=self.model,
-                max_tokens=4096,
-                system=system_prompt,
-                messages=messages,
-                tools=tools or [],
-            ) as stream:
-                for text in stream.text_stream:
-                    yield {"type": "text_delta", "text": text}
-                response = stream.get_final_message()
-            yield {"type": "done", "response": response}
+        yield from self.client.create_stream(
+            model=self.model,
+            max_tokens=4096,
+            system=system_prompt,
+            messages=messages,
+            tools=tools,
+        )
 
     def handle_stream(self, user_input: str):
         """Process user input, yielding progress events as dicts.
@@ -750,7 +745,7 @@ class Orchestrator:
                 break
 
             # Collect reasoning from response
-            if hasattr(response, "reasoning") and response.reasoning:
+            if response.reasoning:
                 reasoning_text = response.reasoning
 
             if response.stop_reason == "end_turn":
@@ -758,7 +753,11 @@ class Orchestrator:
                 break
 
             if response.stop_reason == "tool_use":
-                messages.append({"role": "assistant", "content": response.content})
+                asst_msg = {"role": "assistant", "content": response.content}
+                # Preserve reasoning for providers that require it on tool call messages
+                if response.reasoning:
+                    asst_msg["reasoning"] = response.reasoning
+                messages.append(asst_msg)
                 tool_results = []
 
                 for block in response.content:
@@ -854,7 +853,7 @@ class Orchestrator:
             if response is None:
                 break
 
-            if hasattr(response, "reasoning") and response.reasoning:
+            if response.reasoning:
                 reasoning_text = response.reasoning
 
             if response.stop_reason == "end_turn":
@@ -862,7 +861,11 @@ class Orchestrator:
                 break
 
             if response.stop_reason == "tool_use":
-                messages.append({"role": "assistant", "content": response.content})
+                asst_msg = {"role": "assistant", "content": response.content}
+                # Preserve reasoning for providers that require it on tool call messages
+                if response.reasoning:
+                    asst_msg["reasoning"] = response.reasoning
+                messages.append(asst_msg)
                 tool_results = []
                 for block in response.content:
                     if block.type == "tool_use":
@@ -1218,7 +1221,7 @@ class Orchestrator:
 
     def _tool_delegate_technical(self, input_data: dict) -> str:
         log.info("Delegating technical query: %s", input_data["query"][:100])
-        response = self.client.messages.create(
+        response = self.client.create(
             model=self.model,
             max_tokens=2048,
             system="You are a helpful technical assistant. Answer accurately and concisely.",
@@ -1385,7 +1388,7 @@ class Orchestrator:
 
     # ── Utilities ─────────────────────────────────────────────────────
 
-    def _extract_text(self, response: anthropic.types.Message) -> str:
+    def _extract_text(self, response: LLMResponse) -> str:
         parts = []
         for block in response.content:
             if block.type == "text":

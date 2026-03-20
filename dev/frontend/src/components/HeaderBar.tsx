@@ -14,6 +14,23 @@ interface HeaderBarProps {
   onOpenSessions: () => void;
 }
 
+function LabeledBtn({ label, onClick, title, children }: {
+  label: string; onClick: () => void; title?: string; children: React.ReactNode;
+}) {
+  return (
+    <div className="flex flex-col items-center gap-0.5">
+      {label && <span className="text-[9px] uppercase tracking-wider text-text-muted/50 leading-none">{label}</span>}
+      <button
+        onClick={onClick}
+        title={title}
+        className="text-xs px-2 py-1 rounded-md bg-surface-alt text-text-muted hover:text-text transition-colors"
+      >
+        {children}
+      </button>
+    </div>
+  );
+}
+
 export default function HeaderBar({ status, layoutName, onOpenProfile, onOpenMode, onOpenContext, onOpenLore, onOpenPrompts, onOpenLayout, onOpenProviders, onNewSession, onOpenSessions }: HeaderBarProps) {
   const ready = status?.status === "ready";
 
@@ -32,64 +49,19 @@ export default function HeaderBar({ status, layoutName, onOpenProfile, onOpenMod
         )}
       </div>
 
-      <div className="flex items-center gap-2">
+      <div className="flex items-end gap-2">
         {ready && (
           <>
-            <button
-              onClick={onNewSession}
-              className="text-xs px-2 py-1 rounded-md bg-surface-alt text-text-muted hover:text-text transition-colors"
-              title="Start new session"
-            >
-              +
-            </button>
-            <button
-              onClick={onOpenSessions}
-              className="text-xs px-2 py-1 rounded-md bg-surface-alt text-text-muted hover:text-text transition-colors"
-              title="Browse saved sessions"
-            >
-              sessions
-            </button>
-            <button
-              onClick={onOpenLore}
-              className="text-xs px-2 py-1 rounded-md bg-surface-alt text-text-muted hover:text-text transition-colors"
-              title="Browse lore files"
-            >
-              {status.lore_files} lore
-            </button>
-            <button
-              onClick={onOpenContext}
-              className="text-xs px-2 py-1 rounded-md bg-surface-alt text-text-muted hover:text-text transition-colors"
-              title="Context usage"
-            >
-              ctx
-            </button>
-            <button
-              onClick={onOpenPrompts}
-              className="text-xs px-2 py-1 rounded-md bg-surface-alt text-text-muted hover:text-text transition-colors"
-              title="Browse persona prompts"
-            >
-              prompts
-            </button>
-            <button
-              onClick={onOpenLayout}
-              className="text-xs px-2 py-1 rounded-md bg-surface-alt text-text-muted hover:text-text transition-colors"
-              title="Switch layout"
-            >
-              {layoutName}
-            </button>
-            <button
-              onClick={onOpenProviders}
-              className="text-xs px-2 py-1 rounded-md bg-surface-alt text-text-muted hover:text-text transition-colors"
-              title="Configure AI providers"
-            >
+            <LabeledBtn label="session" onClick={onNewSession} title="Start new session">+</LabeledBtn>
+            <LabeledBtn label="" onClick={onOpenSessions} title="Browse saved sessions">sessions</LabeledBtn>
+            <LabeledBtn label="lore" onClick={onOpenLore} title="Browse lore files">{status.lore_files} files</LabeledBtn>
+            <LabeledBtn label="context" onClick={onOpenContext} title="Context usage">ctx</LabeledBtn>
+            <LabeledBtn label="prompts" onClick={onOpenPrompts} title="Browse persona prompts">prompts</LabeledBtn>
+            <LabeledBtn label="layout" onClick={onOpenLayout} title="Switch layout">{layoutName}</LabeledBtn>
+            <LabeledBtn label="model" onClick={onOpenProviders} title="Configure AI providers">
               {status.model.split("-").slice(0, 2).join("-")}
-            </button>
-            <button
-              onClick={onOpenProfile}
-              className="text-xs px-2 py-1 rounded-md bg-surface-alt text-text-muted hover:text-text transition-colors"
-            >
-              {status.persona}
-            </button>
+            </LabeledBtn>
+            <LabeledBtn label="persona" onClick={onOpenProfile} title="Active persona">{status.persona}</LabeledBtn>
           </>
         )}
         {!ready && (
