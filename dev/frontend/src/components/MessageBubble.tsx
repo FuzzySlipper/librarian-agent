@@ -26,9 +26,11 @@ interface MessageBubbleProps {
   onEdit?: (id: string, newContent: string) => void;
   onRetry?: (id: string) => void;
   onSwipe?: (id: string, direction: "prev" | "next") => void;
+  onDelete?: (id: string) => void;
+  onFork?: (id: string) => void;
 }
 
-export default function MessageBubble({ message, index, mode, onEdit, onRetry, onSwipe }: MessageBubbleProps) {
+export default function MessageBubble({ message, index, mode, onEdit, onRetry, onSwipe, onDelete, onFork }: MessageBubbleProps) {
   const isUser = message.role === "user";
   const isSystem = message.role === "system";
   const isProse = message.responseType === "prose" || message.responseType === "prose_pending";
@@ -99,7 +101,7 @@ export default function MessageBubble({ message, index, mode, onEdit, onRetry, o
           <button
             onClick={() => onRetry(message.id)}
             className="text-[10px] text-text-muted/40 hover:text-text transition-colors select-none"
-            title={isUser ? "Resend this message" : "Regenerate response"}
+            title={isUser ? "Resend this message" : "Regenerate (add variant)"}
           >
             retry
           </button>
@@ -111,6 +113,24 @@ export default function MessageBubble({ message, index, mode, onEdit, onRetry, o
             title="Edit message"
           >
             edit
+          </button>
+        )}
+        {!isSystem && onFork && !editing && (
+          <button
+            onClick={() => onFork(message.id)}
+            className="text-[10px] text-text-muted/40 hover:text-text transition-colors select-none"
+            title="Fork conversation at this point"
+          >
+            fork
+          </button>
+        )}
+        {!isSystem && onDelete && !editing && (
+          <button
+            onClick={() => onDelete(message.id)}
+            className="text-[10px] text-text-muted/40 hover:text-red-400 transition-colors select-none"
+            title="Delete this message"
+          >
+            del
           </button>
         )}
       </div>

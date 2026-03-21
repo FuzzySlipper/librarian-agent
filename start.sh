@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # Narrative Orchestration System — Launch Script
-# Usage: ./start.sh [--update] [--build-frontend] [--port PORT]
+# Usage: ./start.sh [--update] [--build] [--port PORT]
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
@@ -21,7 +21,7 @@ FORCE_SETUP=false
 for arg in "$@"; do
     case "$arg" in
         --update)         DO_UPDATE=true ;;
-        --build-frontend) BUILD_FRONTEND=true ;;
+        --build|--build-frontend) BUILD_FRONTEND=true ;;
         --setup)          FORCE_SETUP=true ;;
         --port=*)         PORT="${arg#*=}" ;;
         --port)           shift; PORT="${1:-8005}" ;;
@@ -30,7 +30,7 @@ for arg in "$@"; do
             echo ""
             echo "Options:"
             echo "  --update           Pull latest code and update dependencies"
-            echo "  --build-frontend   Rebuild frontend (requires Node.js)"
+            echo "  --build            Rebuild frontend (requires Node.js)"
             echo "  --setup            Force re-run setup (won't overwrite your data)"
             echo "  --port=PORT        Set server port (default: 8005)"
             echo "  -h, --help         Show this help"
@@ -108,7 +108,7 @@ fi
 if [ ! -d "$STATIC_DIR" ]; then
     echo ""
     echo "Warning: No $STATIC_DIR/ directory found."
-    echo "Run with --build-frontend to build, or ensure pre-built files are present."
+    echo "Run with --build to build, or ensure pre-built files are present."
     echo "The API will still work, but there will be no web UI."
     echo ""
 fi

@@ -494,9 +494,12 @@ class Orchestrator:
             truncated = truncated[nl + 2:]
         return truncated
 
-    def list_projects(self) -> dict:
-        """List available projects for the current mode."""
-        base = self._mode_base_dir()
+    def list_projects(self, mode: str | None = None) -> dict:
+        """List available projects for the given mode (or current mode)."""
+        if mode:
+            base = self._base_dir_for_mode(mode)
+        else:
+            base = self._mode_base_dir()
         if base is None or not base.exists():
             return {"projects": []}
 
@@ -507,6 +510,17 @@ class Orchestrator:
                 projects.append({"name": d.name, "files": files})
 
         return {"projects": projects}
+
+    def _base_dir_for_mode(self, mode: str) -> Path | None:
+        """Base content directory for a given mode string."""
+        mode_lower = mode.lower()
+        if mode_lower == "writer":
+            return self.config.paths.writing
+        elif mode_lower == "roleplay":
+            return self.config.paths.chats
+        elif mode_lower == "forge":
+            return self.config.paths.forge
+        return None
 
     # ── Persona loading ───────────────────────────────────────────────
 

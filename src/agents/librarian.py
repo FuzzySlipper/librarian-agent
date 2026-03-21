@@ -10,6 +10,7 @@ import argparse
 import json
 import logging
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -103,24 +104,51 @@ class Librarian:
 
     def _parse_response(self, raw_text: str) -> LoreBundle:
         """Parse the LLM's JSON response into a LoreBundle."""
-        try:
-            # Try to extract JSON from the response
-            text = raw_text.strip()
-            # Handle case where model wraps JSON in markdown code blocks
-            if text.startswith("```"):
-                text = text.split("\n", 1)[1]  # Remove opening ```json
-                text = text.rsplit("```", 1)[0]  # Remove closing ```
-                text = text.strip()
+        text = raw_text.strip()
 
+        # Strip markdown code fences (```json ... ``` or ``` ... ```)
+        if "```" in text:
+            # Find content between first ``` and last ```
+            parts = text.split("```")
+            if len(parts) >= 3:
+                inner = parts[1]
+                # Remove optional language tag on first line
+                if inner.startswith("json"):
+                    inner = inner[4:]
+                text = inner.strip()
+
+        # Try direct parse
+        try:
             data = json.loads(text)
             return LoreBundle(**data)
-        except (json.JSONDecodeError, KeyError, ValueError):
-            log.warning("Failed to parse Librarian response as JSON, wrapping as raw passage")
-            return LoreBundle(
-                relevant_passages=[raw_text],
-                source_files=[],
-                confidence="medium",
-            )
+        except (json.JSONDecodeError, ValueError, KeyError):
+            pass
+
+        # Try to extract JSON object from surrounding prose text.
+        # Walk through the text to find balanced braces.
+        start = text.find("{")
+        if start != -1:
+            depth = 0
+            for i in range(start, len(text)):
+                if text[i] == "{":
+                    depth += 1
+                elif text[i] == "}":
+                    depth -= 1
+                    if depth == 0:
+                        candidate = text[start:i + 1]
+                        try:
+                            data = json.loads(candidate)
+                            return LoreBundle(**data)
+                        except (json.JSONDecodeError, ValueError, KeyError):
+                            pass
+                        break
+
+        log.warning("Failed to parse Librarian response as JSON, wrapping as raw passage")
+        return LoreBundle(
+            relevant_passages=[raw_text],
+            source_files=[],
+            confidence="medium",
+        )
 
     def get_lore_summary(self) -> str:
         """Return a summary of loaded lore for diagnostics."""

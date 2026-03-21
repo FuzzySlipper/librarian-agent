@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Overlay from "./Overlay";
 import {
   listCharacterCards,
@@ -7,6 +7,7 @@ import {
   updateCharacterCard,
   deleteCharacterCard,
   activateCharacterCards,
+  importCharacterCard,
   type CharacterCardSummary,
   type CharacterCard,
 } from "../api";
@@ -34,7 +35,9 @@ export default function CharacterCards({ open, onClose, onChanged, portraits }: 
   const [editing, setEditing] = useState<string | null>(null); // filename or "__new__"
   const [form, setForm] = useState<CharacterCard>(EMPTY_CARD);
   const [saving, setSaving] = useState(false);
+  const [importing, setImporting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (!open) return;
@@ -312,12 +315,46 @@ export default function CharacterCards({ open, onClose, onChanged, portraits }: 
           )}
         </div>
 
-        <button
-          onClick={handleNew}
-          className="text-sm text-accent hover:text-accent-hover self-start"
-        >
-          + New Character
-        </button>
+        <div className="flex gap-3 items-center">
+          <button
+            onClick={handleNew}
+            className="text-sm text-accent hover:text-accent-hover"
+          >
+            + New Character
+          </button>
+          <span className="text-text-muted/30">|</span>
+          <button
+            onClick={() => fileInputRef.current?.click()}
+            disabled={importing}
+            className="text-sm text-accent hover:text-accent-hover disabled:opacity-50"
+          >
+            {importing ? "Importing..." : "Import ST Card"}
+          </button>
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept=".png"
+            className="hidden"
+            onChange={async (e) => {
+              const file = e.target.files?.[0];
+              if (!file) return;
+              setImporting(true);
+              setError(null);
+              try {
+                await importCharacterCard(file);
+                await refresh();
+                // Refresh portraits list too
+                onChanged();
+              } catch (err) {
+                setError(err instanceof Error ? err.message : "Import failed");
+              } finally {
+                setImporting(false);
+                // Reset input so the same file can be re-selected
+                if (fileInputRef.current) fileInputRef.current.value = "";
+              }
+            }}
+          />
+        </div>
 
         {error && <p className="text-sm text-red-400">{error}</p>}
       </div>

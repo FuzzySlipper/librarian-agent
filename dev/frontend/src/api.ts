@@ -161,15 +161,17 @@ export async function setMode(
   mode: Mode,
   project?: string,
   file?: string,
+  character?: string,
 ): Promise<unknown> {
   return request("/api/mode", {
     method: "POST",
-    body: JSON.stringify({ mode, project, file }),
+    body: JSON.stringify({ mode, project, file, character }),
   });
 }
 
-export async function getProjects(): Promise<ProjectList> {
-  return request("/api/projects");
+export async function getProjects(mode?: string): Promise<ProjectList> {
+  const query = mode ? `?mode=${encodeURIComponent(mode)}` : "";
+  return request(`/api/projects${query}`);
 }
 
 export async function newSession(): Promise<unknown> {
@@ -199,6 +201,29 @@ export async function loadSession(
 
 export async function deleteSession(id: string): Promise<unknown> {
   return request(`/api/sessions/${encodeURIComponent(id)}`, { method: "DELETE" });
+}
+
+// ── Conversation manipulation ──
+
+export async function conversationDelete(index: number): Promise<{ status: string; turns: number }> {
+  return request("/api/conversation/delete", {
+    method: "POST",
+    body: JSON.stringify({ index }),
+  });
+}
+
+export async function conversationFork(upToIndex: number): Promise<{ status: string; session_id: string; turns: number }> {
+  return request("/api/conversation/fork", {
+    method: "POST",
+    body: JSON.stringify({ up_to_index: upToIndex }),
+  });
+}
+
+export async function conversationUpdate(index: number, content: string): Promise<{ status: string }> {
+  return request("/api/conversation/update", {
+    method: "POST",
+    body: JSON.stringify({ index, content }),
+  });
 }
 
 export interface LoreFileInfo {
@@ -345,6 +370,20 @@ export async function activateCharacterCards(config: {
     method: "POST",
     body: JSON.stringify(config),
   });
+}
+
+export async function importCharacterCard(file: File): Promise<{ status: string; card: { filename: string; name: string; portrait?: string } }> {
+  const formData = new FormData();
+  formData.append("file", file);
+  const res = await fetch("/api/character-cards/import", {
+    method: "POST",
+    body: formData,
+  });
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(`${res.status}: ${body}`);
+  }
+  return res.json();
 }
 
 // ── Provider management ──

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { getMode, getStatus, newSession, sendChatStream, setMode as apiSetMode } from "./api";
+import { getMode, getStatus, newSession, sendChatStream, setMode as apiSetMode, conversationDelete, conversationFork, conversationUpdate } from "./api";
 import type { Message, MessageVariant, Mode, Status } from "./types";
 import { parseCommand, executeCommand } from "./commands";
 import type { CommandContext } from "./commands";
@@ -365,7 +365,8 @@ function App() {
       return;
     }
 
-    // Normal LLM message
+    // Normal LLM message — sync variant selections first
+    await syncVariantSelections();
     const userMsg: Message = {
       id: uuid(),
       role: "user",
@@ -410,17 +411,9 @@ function App() {
       addAsVariantRef.current = false;
       await doSend(msg.content);
     } else if (msg.role === "assistant") {
-      // Retrying from an assistant message: find the user message before it,
-      // trim from the assistant message onward, and re-send
-      let userIdx = -1;
-      for (let i = idx - 1; i >= 0; i--) {
-        if (messages[i].role === "user") { userIdx = i; break; }
-      }
-      if (userIdx === -1) return;
-      const userContent = messages[userIdx].content;
-      setMessages((prev) => prev.slice(0, userIdx + 1));
-      addAsVariantRef.current = false;
-      await doSend(userContent);
+      // Retry as a swipeable variant — keep the message, add new response as variant
+      addAsVariantRef.current = true;
+      await doSend("regenerate");
     }
   }
 
@@ -460,6 +453,68 @@ function App() {
       const idx = prev.length - 1 - lastAssistantIdx;
       return [...prev.slice(0, idx), ...prev.slice(idx + 1)];
     });
+  }
+
+  async function handleDeleteMessage(id: string) {
+    // Find the message's backend index (only user+assistant messages count)
+    const nonSystemMessages = messages.filter((m) => m.role !== "system");
+    const backendIdx = nonSystemMessages.findIndex((m) => m.id === id);
+    if (backendIdx === -1) return;
+
+    try {
+      await conversationDelete(backendIdx);
+      // Remove from frontend: delete user+assistant pair
+      const msg = messages.find((m) => m.id === id);
+      if (!msg) return;
+      setMessages((prev) => {
+        const msgIdx = prev.findIndex((m) => m.id === id);
+        if (msgIdx === -1) return prev;
+        if (msg.role === "user") {
+          // Delete user and following assistant (if exists)
+          const next = prev[msgIdx + 1];
+          const end = next && next.role === "assistant" ? msgIdx + 2 : msgIdx + 1;
+          return [...prev.slice(0, msgIdx), ...prev.slice(end)];
+        } else {
+          // Delete assistant and preceding user (if exists)
+          const prev2 = prev[msgIdx - 1];
+          const start = prev2 && prev2.role === "user" ? msgIdx - 1 : msgIdx;
+          return [...prev.slice(0, start), ...prev.slice(msgIdx + 1)];
+        }
+      });
+      refreshStatus();
+    } catch {
+      // Failed to delete
+    }
+  }
+
+  async function handleForkMessage(id: string) {
+    const nonSystemMessages = messages.filter((m) => m.role !== "system");
+    const backendIdx = nonSystemMessages.findIndex((m) => m.id === id);
+    if (backendIdx === -1) return;
+
+    try {
+      const result = await conversationFork(backendIdx);
+      addSystemMessage(`Forked conversation saved as session (${result.turns} turns). Open Sessions to load it.`);
+    } catch {
+      addSystemMessage("Failed to fork conversation.");
+    }
+  }
+
+  /**
+   * When the user sends a new message, sync any active variant selections
+   * to the backend so it uses the right content in history.
+   */
+  async function syncVariantSelections() {
+    const nonSystem = messages.filter((m) => m.role !== "system");
+    for (let i = 0; i < nonSystem.length; i++) {
+      const m = nonSystem[i];
+      if (m.variants && m.variants.length > 1 && m.activeVariant !== undefined) {
+        const selected = m.variants[m.activeVariant];
+        // Only sync if the selected variant differs from what the backend has
+        // (backend always has the last response, but we may have swiped)
+        await conversationUpdate(i, selected.content).catch(() => {});
+      }
+    }
   }
 
   const hasAssistantMessages = messages.some((m) => m.role === "assistant");
@@ -510,6 +565,8 @@ function App() {
             onEdit={msg.role !== "system" ? handleEditMessage : undefined}
             onRetry={msg.role !== "system" ? handleRetry : undefined}
             onSwipe={msg.role === "assistant" ? handleSwipe : undefined}
+            onDelete={msg.role !== "system" ? handleDeleteMessage : undefined}
+            onFork={msg.role !== "system" ? handleForkMessage : undefined}
           />
         ))}
         {sending && streamStatus && (

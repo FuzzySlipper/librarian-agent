@@ -57,7 +57,7 @@ export default function HeaderBar({ status, layoutName, onOpenProfile, onOpenMod
           <>
             <LabeledBtn label="session" onClick={onNewSession} title="Start new session">+</LabeledBtn>
             <LabeledBtn label="" onClick={onOpenSessions} title="Browse saved sessions">sessions</LabeledBtn>
-            <LabeledBtn label="lore" onClick={onOpenLore} title="Browse lore files">{status.lore_files} files</LabeledBtn>
+            <LabeledBtn label="lore" onClick={onOpenLore} title="Browse lore files">{status.lore_set !== "(default)" ? status.lore_set : ""} ({status.lore_files})</LabeledBtn>
             <LabeledBtn label="context" onClick={onOpenContext} title="Context usage">ctx</LabeledBtn>
             <LabeledBtn label="prompts" onClick={onOpenPrompts} title="Browse persona prompts">prompts</LabeledBtn>
             <LabeledBtn label="characters" onClick={onOpenCharacters} title="Character cards">chars</LabeledBtn>

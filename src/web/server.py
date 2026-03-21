@@ -14,7 +14,7 @@ from functools import partial
 from pathlib import Path
 from queue import Queue, Empty
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -414,6 +414,7 @@ class ModeRequest(BaseModel):
     mode: str  # "general", "writer", "roleplay", "forge"
     project: str | None = None
     file: str | None = None
+    character: str | None = None  # For roleplay: AI character card filename
 
 
 @app.post("/api/mode")
@@ -429,7 +430,15 @@ async def set_mode(request: ModeRequest):
             "error": f"Invalid mode: {request.mode}. Must be general, writer, roleplay, forge, or council."
         })
 
-    result = _orchestrator.set_mode(mode, project=request.project, file=request.file)
+    # For roleplay, character name becomes the project (chat directory)
+    project = request.project
+    if mode == Mode.ROLEPLAY and request.character:
+        _config.roleplay.ai_character = request.character
+        project = request.character
+        config_path = Path(os.environ.get("CONFIG_PATH", "build/config.yaml"))
+        _save_config_yaml(config_path, _config)
+
+    result = _orchestrator.set_mode(mode, project=project, file=request.file)
     return result
 
 
@@ -448,12 +457,12 @@ async def get_mode():
 
 
 @app.get("/api/projects")
-async def get_projects():
-    """List available projects for the current mode."""
+async def get_projects(mode: str | None = None):
+    """List available projects for a given mode (or the current mode)."""
     if _orchestrator is None:
         return JSONResponse(status_code=503, content={"error": "System not initialized"})
 
-    return _orchestrator.list_projects()
+    return _orchestrator.list_projects(mode=mode)
 
 
 @app.post("/api/session/new")
@@ -472,6 +481,77 @@ async def new_session():
     _current_session_id = None
 
     return {"status": "ok", "message": "Session cleared"}
+
+
+class ConversationDeleteRequest(BaseModel):
+    index: int  # 0-based index into conversation_history
+
+
+@app.post("/api/conversation/delete")
+async def conversation_delete(request: ConversationDeleteRequest):
+    """Delete a message (and its pair) from conversation history by index."""
+    if _orchestrator is None:
+        return JSONResponse(status_code=503, content={"error": "System not initialized"})
+
+    history = _orchestrator.conversation_history
+    idx = request.index
+    if idx < 0 or idx >= len(history):
+        return JSONResponse(status_code=400, content={"error": "Index out of range"})
+
+    msg = history[idx]
+    if msg["role"] == "user":
+        # Delete user message and the following assistant message (if it exists)
+        end = idx + 2 if idx + 1 < len(history) and history[idx + 1]["role"] == "assistant" else idx + 1
+        del history[idx:end]
+    else:
+        # Delete assistant message and the preceding user message (if it exists)
+        start = idx - 1 if idx > 0 and history[idx - 1]["role"] == "user" else idx
+        del history[start:idx + 1]
+
+    _auto_save()
+    return {"status": "ok", "turns": len(history) // 2}
+
+
+class ConversationForkRequest(BaseModel):
+    up_to_index: int  # Include messages 0..up_to_index
+
+
+@app.post("/api/conversation/fork")
+async def conversation_fork(request: ConversationForkRequest):
+    """Fork conversation: save messages up to index as a new session."""
+    if _orchestrator is None:
+        return JSONResponse(status_code=503, content={"error": "System not initialized"})
+
+    history = _orchestrator.conversation_history
+    end = request.up_to_index + 1
+    if end < 1 or end > len(history):
+        return JSONResponse(status_code=400, content={"error": "Index out of range"})
+
+    forked = history[:end]
+    fork_id = _generate_session_id()
+    _save_session(fork_id, forked, _orchestrator.mode.value)
+
+    return {"status": "ok", "session_id": fork_id, "turns": len(forked) // 2}
+
+
+class ConversationUpdateRequest(BaseModel):
+    index: int
+    content: str
+
+
+@app.post("/api/conversation/update")
+async def conversation_update(request: ConversationUpdateRequest):
+    """Update a message's content in conversation history (for variant selection)."""
+    if _orchestrator is None:
+        return JSONResponse(status_code=503, content={"error": "System not initialized"})
+
+    history = _orchestrator.conversation_history
+    if request.index < 0 or request.index >= len(history):
+        return JSONResponse(status_code=400, content={"error": "Index out of range"})
+
+    history[request.index]["content"] = request.content
+    _auto_save()
+    return {"status": "ok"}
 
 
 @app.get("/api/sessions")
@@ -599,6 +679,69 @@ async def list_lore():
     }
 
 
+_LORE_DEFAULT_CATEGORIES = ["characters", "locations", "events", "factions"]
+
+
+class LoreProjectRequest(BaseModel):
+    name: str
+
+
+@app.get("/api/lore/projects")
+async def list_lore_projects():
+    """List available lore projects."""
+    if _config is None:
+        return JSONResponse(status_code=503, content={"error": "System not initialized"})
+
+    from src.config import list_profiles
+    profiles = list_profiles(_config)
+
+    return {
+        "projects": profiles["lore_sets"],
+        "active": _config.lore.active or "(default)",
+    }
+
+
+@app.post("/api/lore/projects")
+async def create_lore_project(request: LoreProjectRequest):
+    """Create a new lore project with standard directory structure."""
+    global _orchestrator
+
+    if _config is None:
+        return JSONResponse(status_code=503, content={"error": "System not initialized"})
+
+    # Sanitize name
+    name = request.name.strip().lower().replace(" ", "-")
+    name = "".join(c for c in name if c.isalnum() or c in "-_")
+    if not name:
+        return JSONResponse(status_code=400, content={"error": "Invalid project name"})
+
+    project_dir = _config.paths.lore / name
+    if project_dir.exists():
+        return JSONResponse(status_code=409, content={"error": "Project already exists"})
+
+    project_dir.mkdir(parents=True, exist_ok=True)
+    for subdir in _LORE_DEFAULT_CATEGORIES:
+        (project_dir / subdir).mkdir(exist_ok=True)
+
+    # Create starter world-overview.md
+    overview = project_dir / "world-overview.md"
+    overview.write_text(
+        "# World Overview\n\n"
+        "Describe your world, setting, tone, and themes here.\n",
+        encoding="utf-8",
+    )
+
+    # Activate the new project
+    _config.lore.active = name
+    config_path = Path(os.environ.get("CONFIG_PATH", "build/config.yaml"))
+    _save_config_yaml(config_path, _config)
+
+    loop = asyncio.get_event_loop()
+    await loop.run_in_executor(None, _reinitialize_agents)
+
+    return {"status": "ok", "name": name}
+
+
 @app.get("/api/lore/{file_path:path}")
 async def read_lore(file_path: str):
     """Read a single lore file."""
@@ -676,69 +819,6 @@ async def delete_lore_file(file_path: str):
     await loop.run_in_executor(None, _reinitialize_agents)
 
     return {"status": "ok", "path": file_path}
-
-
-_LORE_DEFAULT_CATEGORIES = ["characters", "locations", "events", "factions"]
-
-
-class LoreProjectRequest(BaseModel):
-    name: str
-
-
-@app.post("/api/lore/projects")
-async def create_lore_project(request: LoreProjectRequest):
-    """Create a new lore project with standard directory structure."""
-    global _orchestrator
-
-    if _config is None:
-        return JSONResponse(status_code=503, content={"error": "System not initialized"})
-
-    # Sanitize name
-    name = request.name.strip().lower().replace(" ", "-")
-    name = "".join(c for c in name if c.isalnum() or c in "-_")
-    if not name:
-        return JSONResponse(status_code=400, content={"error": "Invalid project name"})
-
-    project_dir = _config.paths.lore / name
-    if project_dir.exists():
-        return JSONResponse(status_code=409, content={"error": "Project already exists"})
-
-    project_dir.mkdir(parents=True, exist_ok=True)
-    for subdir in _LORE_DEFAULT_CATEGORIES:
-        (project_dir / subdir).mkdir(exist_ok=True)
-
-    # Create starter world-overview.md
-    overview = project_dir / "world-overview.md"
-    overview.write_text(
-        "# World Overview\n\n"
-        "Describe your world, setting, tone, and themes here.\n",
-        encoding="utf-8",
-    )
-
-    # Activate the new project
-    _config.lore.active = name
-    config_path = Path(os.environ.get("CONFIG_PATH", "build/config.yaml"))
-    _save_config_yaml(config_path, _config)
-
-    loop = asyncio.get_event_loop()
-    await loop.run_in_executor(None, _reinitialize_agents)
-
-    return {"status": "ok", "name": name}
-
-
-@app.get("/api/lore/projects")
-async def list_lore_projects():
-    """List available lore projects."""
-    if _config is None:
-        return JSONResponse(status_code=503, content={"error": "System not initialized"})
-
-    from src.config import list_profiles
-    profiles = list_profiles(_config)
-
-    return {
-        "projects": profiles["lore_sets"],
-        "active": _config.lore.active or "(default)",
-    }
 
 
 # ── Persona / prompt endpoints ────────────────────────────────────────
@@ -882,6 +962,44 @@ async def write_writing_style(name: str, request: StyleWriteRequest):
 
 
 # ── Character card endpoints ─────────────────────────────────────────
+
+
+@app.post("/api/character-cards/import")
+async def import_character_card(file: UploadFile):
+    """Import a SillyTavern/TavernAI character card PNG."""
+    if _config is None:
+        return JSONResponse(status_code=503, content={"error": "System not initialized"})
+
+    if not file.filename or not file.filename.lower().endswith(".png"):
+        return JSONResponse(status_code=400, content={"error": "Only PNG files are supported"})
+
+    from src.character_cards import import_tavern_card
+    import tempfile
+
+    # Save uploaded file to a temp location
+    content = await file.read()
+    with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
+        tmp.write(content)
+        tmp_path = Path(tmp.name)
+
+    try:
+        result = import_tavern_card(
+            png_path=tmp_path,
+            cards_dir=Path(_config.paths.character_cards),
+            portraits_dir=Path(_config.paths.portraits),
+        )
+        return {
+            "status": "ok",
+            "card": {
+                "filename": result["_filename"],
+                "name": result["name"],
+                "portrait": result.get("portrait"),
+            },
+        }
+    except ValueError as e:
+        return JSONResponse(status_code=400, content={"error": str(e)})
+    finally:
+        tmp_path.unlink(missing_ok=True)
 
 
 @app.get("/api/character-cards")
