@@ -67,9 +67,7 @@ class ProseWriter:
 
     @staticmethod
     def _default_client() -> LLMClient:
-        from src.llm_anthropic import AnthropicClient
-        import anthropic
-        return AnthropicClient(anthropic.Anthropic())
+        raise RuntimeError("No LLM client configured. Set up a provider in the Model settings.")
 
     def _load_writing_style(self) -> str:
         """Load the active writing style from file."""

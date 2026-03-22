@@ -152,9 +152,7 @@ def run_planner(
     )
 
     if client is None:
-        from src.llm_anthropic import AnthropicClient
-        import anthropic
-        client = AnthropicClient(anthropic.Anthropic())
+        raise RuntimeError("No LLM client provided to forge planner. Set up a provider in the Model settings.")
     messages: list[dict] = [{"role": "user", "content": user_prompt}]
 
     while True:

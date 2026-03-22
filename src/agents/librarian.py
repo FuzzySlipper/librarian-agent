@@ -70,9 +70,7 @@ class Librarian:
 
     @staticmethod
     def _default_client() -> LLMClient:
-        from src.llm_anthropic import AnthropicClient
-        import anthropic
-        return AnthropicClient(anthropic.Anthropic())
+        raise RuntimeError("No LLM client configured. Set up a provider in the Model settings.")
 
     def _build_system_prompt(self) -> str:
         """Build system prompt with all lore content embedded."""

@@ -1364,6 +1364,7 @@ class ProviderUpdateRequest(BaseModel):
     models_url: str | None = None
     api_key: str | None = None
     selected_model: str | None = None
+    context_limit: int | None = None
     options: dict | None = None
 
 
@@ -1855,8 +1856,10 @@ async def forge_design(project: str):
 
     def _run_design():
         try:
-            librarian = Librarian(_config)
-            for event in fp.run_design(librarian):
+            # Get client from provider registry so forge uses configured provider
+            client = _registry.get_client(_config.models.orchestrator) if _registry else None
+            librarian = Librarian(_config, client=client)
+            for event in fp.run_design(librarian, client=client):
                 queue.put(event)
         except Exception as e:
             queue.put({"event": "error", "message": str(e)})
@@ -1906,9 +1909,9 @@ async def forge_start(project: str):
     def _run_pipeline():
         """Run the forge pipeline in a thread, pushing events to the queue."""
         try:
-            # Reinitialize librarian to pick up any new lore files from planning
-            librarian = Librarian(_config)
-            for event in fp.run_pipeline(librarian):
+            client = _registry.get_client(_config.models.orchestrator) if _registry else None
+            librarian = Librarian(_config, client=client)
+            for event in fp.run_pipeline(librarian, client=client):
                 queue.put(event)
         except Exception as e:
             queue.put({"event": "error", "message": str(e)})

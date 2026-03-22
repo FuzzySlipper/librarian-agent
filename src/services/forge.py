@@ -267,8 +267,12 @@ class ForgeProject:
 
     # ── Pipeline entry point ─────────────────────────────────────────
 
-    def run_design(self, librarian) -> Generator[dict, None, None]:
+    def run_design(self, librarian, client=None) -> Generator[dict, None, None]:
         """Run only the design stage (planner creates outline, style, briefs, lore).
+
+        Args:
+            librarian: Initialized Librarian agent.
+            client: LLMClient to use. If None, agents fall back to their defaults.
 
         Stops after design. User reviews output, then runs run_pipeline() to write.
         """
@@ -297,7 +301,7 @@ class ForgeProject:
             self._set_stage("design")
             self._record_timing("design", "start")
             yield {"event": "stage", "stage": "design", "message": "Starting design phase..."}
-            yield from self._run_design(librarian)
+            yield from self._run_design(librarian, client=client)
             self._record_timing("design", "end")
 
             # Discover chapters from briefs
@@ -317,7 +321,7 @@ class ForgeProject:
         finally:
             _running.discard(self.name)
 
-    def run_pipeline(self, librarian) -> Generator[dict, None, None]:
+    def run_pipeline(self, librarian, client=None) -> Generator[dict, None, None]:
         """Execute the writing pipeline (stages 3-5), yielding SSE events.
 
         Design must be complete before calling this. If not, runs design first.
@@ -329,14 +333,14 @@ class ForgeProject:
         _running.add(self.name)
         try:
             self.load()
-            yield from self._run_pipeline_inner(librarian)
+            yield from self._run_pipeline_inner(librarian, client=client)
         except Exception as e:
             log.exception("Forge pipeline error for %s", self.name)
             yield {"event": "error", "message": str(e)}
         finally:
             _running.discard(self.name)
 
-    def _run_pipeline_inner(self, librarian) -> Generator[dict, None, None]:
+    def _run_pipeline_inner(self, librarian, client=None) -> Generator[dict, None, None]:
         assert self.manifest is not None
 
         # ── Stage 2: Design ──────────────────────────────────────────
@@ -344,7 +348,7 @@ class ForgeProject:
             self._set_stage("design")
             self._record_timing("design", "start")
             yield {"event": "stage", "stage": "design", "message": "Starting design phase..."}
-            yield from self._run_design(librarian)
+            yield from self._run_design(librarian, client=client)
             self._record_timing("design", "end")
 
             # Reload chapter count from briefs
@@ -369,7 +373,7 @@ class ForgeProject:
             self._set_stage("writing")
             self._record_timing("writing", "start")
             yield {"event": "stage", "stage": "writing", "message": "Starting writing phase..."}
-            yield from self._run_writing(librarian)
+            yield from self._run_writing(librarian, client=client)
             self._record_timing("writing", "end")
 
             if self.manifest.paused:
@@ -404,7 +408,7 @@ class ForgeProject:
 
     # ── Stage 2: Design ──────────────────────────────────────────────
 
-    def _run_design(self, librarian) -> Generator[dict, None, None]:
+    def _run_design(self, librarian, client=None) -> Generator[dict, None, None]:
         """Run the planner agent to produce outline, style, bible, and chapter briefs."""
         from src.agents.forge_planner import run_planner
 
@@ -434,6 +438,7 @@ class ForgeProject:
             prompts_dir=self.config.paths.forge_prompts,
             model=planner_model,
             stats_callback=self._bump_stats,
+            client=client,
         ):
             if event.get("event") == "progress":
                 yield event
@@ -446,7 +451,7 @@ class ForgeProject:
 
     # ── Stage 3: Writing ─────────────────────────────────────────────
 
-    def _run_writing(self, librarian) -> Generator[dict, None, None]:
+    def _run_writing(self, librarian, client=None) -> Generator[dict, None, None]:
         """Write chapters one by one with review/revise loop."""
         from src.agents.forge_reviewer import review_chapter
         from src.agents.forge_writer import write_chapter
@@ -499,6 +504,7 @@ class ForgeProject:
                 prompts_dir=self.config.paths.forge_prompts,
                 model=writer_model,
                 max_tokens=self.config.forge.chapter_max_tokens,
+                client=client,
             )
 
             draft_path = self.chapters_dir / f"{ch_key}-draft.md"
@@ -523,6 +529,7 @@ class ForgeProject:
                     prompts_dir=self.config.paths.forge_prompts,
                     model=reviewer_model,
                     threshold=threshold,
+                    client=client,
                 )
                 self._bump_stats(**review_stats)
 
@@ -584,6 +591,7 @@ class ForgeProject:
                     max_tokens=self.config.forge.chapter_max_tokens,
                     revision_feedback=review_result.feedback,
                     previous_draft=draft_text,
+                    client=client,
                 )
                 draft_path.write_text(draft_text, encoding="utf-8")
                 self._bump_stats(**write_stats)

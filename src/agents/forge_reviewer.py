@@ -124,6 +124,7 @@ def review_chapter(
     prompts_dir: Path,
     model: str,
     threshold: float = 7.0,
+    client=None,
 ) -> tuple[ReviewResult, dict]:
     """Review a single chapter draft against its brief.
 
@@ -146,34 +147,53 @@ def review_chapter(
 
     user_prompt = "\n\n".join(parts)
 
-    pool = DelegatePool()
-    result = pool.run_single(Task(
-        id="review",
-        system=system_prompt,
-        prompt=user_prompt,
-        provider=Provider.ANTHROPIC,
-        model=model,
-        max_tokens=2048,
-        temperature=0.3,  # Low temp for consistent scoring
-    ))
-
     stats = {"input_tokens": 0, "output_tokens": 0, "agent_calls": 1}
 
-    if result.error:
-        log.error("Review failed: %s", result.error)
+    if client:
+        # Use the provided LLM client
+        response = client.create(
+            model=model,
+            max_tokens=2048,
+            system=system_prompt,
+            messages=[{"role": "user", "content": user_prompt}],
+        )
+        raw_text = ""
+        for block in response.content:
+            if block.type == "text":
+                raw_text += block.text
+        stats["input_tokens"] = response.usage.input_tokens
+        stats["output_tokens"] = response.usage.output_tokens
+        result_text = raw_text
+        result_error = None
+    else:
+        pool = DelegatePool()
+        delegate_result = pool.run_single(Task(
+            id="review",
+            system=system_prompt,
+            prompt=user_prompt,
+            provider=Provider.ANTHROPIC,
+            model=model,
+            max_tokens=2048,
+            temperature=0.3,
+        ))
+        result_text = delegate_result.text
+        result_error = delegate_result.error
+
+    if result_error:
+        log.error("Review failed: %s", result_error)
         # Return a failing review so the chapter gets flagged
         return ReviewResult(
             continuity=0, brief_adherence=0, voice_consistency=0, quality=0,
-            overall=0, feedback=f"Review error: {result.error}", passed=False,
+            overall=0, feedback=f"Review error: {result_error}", passed=False,
         ), stats
 
     try:
-        review = _parse_review_json(result.content, threshold)
+        review = _parse_review_json(result_text, threshold)
     except (json.JSONDecodeError, KeyError, ValueError) as e:
-        log.error("Failed to parse review JSON: %s\nRaw: %s", e, result.content[:500])
+        log.error("Failed to parse review JSON: %s\nRaw: %s", e, result_text[:500])
         return ReviewResult(
             continuity=0, brief_adherence=0, voice_consistency=0, quality=0,
-            overall=0, feedback=f"Parse error: {e}. Raw response: {result.content[:300]}",
+            overall=0, feedback=f"Parse error: {e}. Raw response: {result_text[:300]}",
             passed=False,
         ), stats
 

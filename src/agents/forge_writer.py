@@ -108,9 +108,7 @@ def write_chapter(
     user_prompt = "\n\n".join(parts)
 
     if client is None:
-        from src.llm_anthropic import AnthropicClient
-        import anthropic
-        client = AnthropicClient(anthropic.Anthropic())
+        raise RuntimeError("No LLM client provided to forge writer. Set up a provider in the Model settings.")
     messages: list[dict] = [{"role": "user", "content": user_prompt}]
     lore_queries: list[str] = []
     total_input = 0
