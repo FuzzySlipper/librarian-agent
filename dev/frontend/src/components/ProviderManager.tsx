@@ -27,6 +27,7 @@ interface FormState {
   models_url: string;
   api_key: string;
   selected_model: string;
+  context_limit: number;
 }
 
 const EMPTY_FORM: FormState = {
@@ -37,6 +38,7 @@ const EMPTY_FORM: FormState = {
   models_url: "",
   api_key: "",
   selected_model: "",
+  context_limit: 128000,
 };
 
 const OPTIONS_REFERENCE = `Available options (all optional):
@@ -166,6 +168,7 @@ export default function ProviderManager({ open, onClose, onChanged }: ProviderMa
       models_url: p.models_url || "",
       api_key: "",
       selected_model: p.selected_model,
+      context_limit: p.context_limit ?? 128000,
     });
     setModels([]);
     setError(null);
@@ -245,6 +248,7 @@ export default function ProviderManager({ open, onClose, onChanged }: ProviderMa
           models_url: form.models_url || null,
           api_key: form.api_key || undefined,
           selected_model: form.selected_model,
+          context_limit: form.context_limit,
           options: opts,
         });
       } else if (editing) {
@@ -254,6 +258,7 @@ export default function ProviderManager({ open, onClose, onChanged }: ProviderMa
         if (form.api_key) updates.api_key = form.api_key;
         if (form.base_url !== undefined) updates.base_url = form.base_url || null;
         if (form.models_url !== undefined) updates.models_url = form.models_url || null;
+        updates.context_limit = form.context_limit;
         if (opts) updates.options = opts;
         await updateProvider(editing, updates);
       }
@@ -392,6 +397,21 @@ export default function ProviderManager({ open, onClose, onChanged }: ProviderMa
                 className={inputClass}
               />
             )}
+          </div>
+
+          <div>
+            <label className="text-xs text-text-muted uppercase tracking-wider">Context Limit (tokens)</label>
+            <input
+              type="number"
+              value={form.context_limit}
+              onChange={(e) => setForm({ ...form, context_limit: parseInt(e.target.value) || 128000 })}
+              className={inputClass}
+              min={1000}
+              step={1000}
+            />
+            <div className="text-[10px] text-text-muted mt-0.5">
+              {form.context_limit >= 1000000 ? `${(form.context_limit / 1000000).toFixed(1)}M` : `${Math.round(form.context_limit / 1000)}k`} tokens
+            </div>
           </div>
 
           <div>

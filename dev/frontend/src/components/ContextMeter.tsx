@@ -4,27 +4,70 @@ interface ContextMeterProps {
   status: Status | null;
 }
 
+function fmtTokens(n: number): string {
+  if (n >= 1000) return `${Math.round(n / 1000)}k`;
+  return `${n}`;
+}
+
 export default function ContextMeter({ status }: ContextMeterProps) {
   if (!status || status.status !== "ready") return null;
 
-  // Rough token estimates based on what's loaded
-  // In the future, the backend can return actual token counts
-  const loreTokens = status.lore_files * 500; // rough avg per lore file
-  const maxContext = 200000;
-  const lorePercent = Math.min((loreTokens / maxContext) * 100, 100);
+  const limit = status.context_limit || 128000;
+  const lore = status.lore_tokens || 0;
+  const persona = status.persona_tokens || 0;
+  const history = status.history_tokens || 0;
+  const total = lore + persona + history;
+  const totalPercent = Math.min((total / limit) * 100, 100);
+
+  // Segment widths as % of the bar
+  const loreW = (lore / limit) * 100;
+  const personaW = (persona / limit) * 100;
+  const historyW = (history / limit) * 100;
 
   return (
     <div className="flex flex-col gap-1.5">
-      <div className="text-xs text-text-muted">Context usage (est.)</div>
-      <div className="h-2 rounded-full bg-input-bg overflow-hidden">
-        <div
-          className="h-full rounded-full bg-accent transition-all"
-          style={{ width: `${lorePercent}%` }}
-        />
+      <div className="flex items-center justify-between">
+        <span className="text-xs text-text-muted">Context usage</span>
+        <span className="text-xs text-text-muted">
+          {fmtTokens(total)} / {fmtTokens(limit)} ({Math.round(totalPercent)}%)
+        </span>
       </div>
-      <div className="flex justify-between text-xs text-text-muted">
-        <span>{status.lore_files} lore files (~{Math.round(loreTokens / 1000)}k tokens)</span>
-        <span>{Math.round(lorePercent)}%</span>
+      <div className="h-3 rounded-full bg-input-bg overflow-hidden flex">
+        {loreW > 0 && (
+          <div
+            className="h-full bg-blue-500/80"
+            style={{ width: `${Math.max(loreW, 0.5)}%` }}
+            title={`Lore: ${fmtTokens(lore)} tokens`}
+          />
+        )}
+        {personaW > 0 && (
+          <div
+            className="h-full bg-purple-500/80"
+            style={{ width: `${Math.max(personaW, 0.5)}%` }}
+            title={`Persona: ${fmtTokens(persona)} tokens`}
+          />
+        )}
+        {historyW > 0 && (
+          <div
+            className="h-full bg-accent/80"
+            style={{ width: `${Math.max(historyW, 0.5)}%` }}
+            title={`Conversation: ${fmtTokens(history)} tokens`}
+          />
+        )}
+      </div>
+      <div className="flex gap-4 text-[10px] text-text-muted">
+        <span className="flex items-center gap-1">
+          <span className="inline-block w-2 h-2 rounded-sm bg-blue-500/80" />
+          Lore {fmtTokens(lore)}
+        </span>
+        <span className="flex items-center gap-1">
+          <span className="inline-block w-2 h-2 rounded-sm bg-purple-500/80" />
+          Persona {fmtTokens(persona)}
+        </span>
+        <span className="flex items-center gap-1">
+          <span className="inline-block w-2 h-2 rounded-sm bg-accent/80" />
+          Chat {fmtTokens(history)}
+        </span>
       </div>
     </div>
   );

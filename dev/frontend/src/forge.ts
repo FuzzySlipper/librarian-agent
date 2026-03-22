@@ -9,12 +9,28 @@ import type { StreamEvent } from "./api";
  * Maps forge-specific events into the standard StreamEvent format
  * that the App's streamRequest handler understands.
  */
+export async function sendForgeDesignStream(
+  project: string,
+  onEvent: (event: StreamEvent) => void,
+  signal: AbortSignal,
+): Promise<void> {
+  return _streamForgeEndpoint(`/api/forge/${encodeURIComponent(project)}/design`, onEvent, signal);
+}
+
 export async function sendForgeStream(
   project: string,
   onEvent: (event: StreamEvent) => void,
   signal: AbortSignal,
 ): Promise<void> {
-  const res = await fetch(`/api/forge/${encodeURIComponent(project)}/start`, {
+  return _streamForgeEndpoint(`/api/forge/${encodeURIComponent(project)}/start`, onEvent, signal);
+}
+
+async function _streamForgeEndpoint(
+  url: string,
+  onEvent: (event: StreamEvent) => void,
+  signal: AbortSignal,
+): Promise<void> {
+  const res = await fetch(url, {
     method: "POST",
     signal,
   });
@@ -102,7 +118,12 @@ function _mapForgeEvent(
     case "complete":
       return {
         type: "done",
-        data: { content: `StoryForge complete! Output: \`${data.output_path}\``, response_type: "confirmation" },
+        data: {
+          content: data.output_path
+            ? `StoryForge complete! Output: \`${data.output_path}\``
+            : (data.message as string) || "Stage complete.",
+          response_type: "confirmation",
+        },
       };
 
     case "error":

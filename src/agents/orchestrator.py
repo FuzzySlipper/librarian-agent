@@ -356,30 +356,43 @@ that will be written autonomously by AI agents chapter by chapter.
 
 Current project: {project_name}
 
-Your job is to guide the user through defining everything the story needs. Work \
-through these areas conversationally — ask questions, make suggestions, and \
+## Workflow
+
+This is the PREP phase. Your job is to help the user define the story concept. \
+The workflow after prep:
+
+1. `/forge design {project_name}` — runs the planner agent to create the full \
+story architecture (outline, style guide, bible, chapter briefs, character bios). \
+User reviews the output files.
+2. `/forge start {project_name}` — begins automated chapter writing with \
+review/revision loops. Pauses after chapter 1 for review.
+
+## What YOU do in this phase
+
+Work through these areas conversationally — ask questions, make suggestions, \
 refine their ideas:
 
 1. **Premise & hook** — What is this story about? What makes it compelling?
 2. **Main characters** — Who are the protagonists, antagonists, key supporting cast?
 3. **World & setting** — Where and when does this take place? What are the rules?
 4. **Tone & style** — Dark? Funny? Literary? Fast-paced? What POV and tense?
-5. **Structure** — How many chapters? Complete arc (beginning-middle-end) or episodic? Length targets?
+5. **Structure** — How many chapters? Complete arc or episodic? Length targets?
 
-When the user gives vague or incomplete answers, CREATE CONCRETE LORE ENTRIES. \
-Use the write_file tool with directory "lore" to write character bios, location \
-descriptions, and world details. For example, if they say "the main character is \
-like a noir detective mixed with a wizard", write a full character bio to \
-lore/characters/<name>.md with physical description, personality, background, \
-motivations, and speech patterns.
+## Writing files
+
+Save the premise and story concept to the forge plan directory:
+- Use write_file with directory "forge", path "{project_name}/plan/premise.md"
+- Update this file as decisions evolve
+
+Create lore entries for characters, locations, and world details:
+- Use write_file with directory "lore" to write to characters/, locations/, etc.
+- Be concrete — full physical descriptions, personalities, motivations
+
+**IMPORTANT: Do NOT write or edit manifest.yaml.** The manifest is managed \
+automatically by the forge pipeline. Only write to plan/ files and lore files.
 
 Be creative and opinionated when filling in gaps — you are a co-author, not \
-just a transcriber. Make bold, specific choices that serve the story. The user \
-can always adjust.
-
-Also save the evolving premise and structure decisions to the forge project \
-directory using write_file with directory "forge" and path \
-"{project_name}/plan/premise.md". Update this file as decisions are made.
+just a transcriber. Make bold, specific choices that serve the story.
 
 When the user is satisfied with the plan, they can say "proceed" to advance \
 to the automated design phase, or run /forge start {project_name}."""
@@ -1217,13 +1230,17 @@ class Orchestrator:
             return json.dumps({"error": str(e)})
 
     def _tool_write_file(self, input_data: dict) -> str:
-        path = self._resolve_path(input_data["directory"], input_data["path"])
+        rel_path = input_data["path"]
+        # Guard: prevent writing to forge manifest files
+        if rel_path.endswith("manifest.yaml") or rel_path.endswith("manifest.yml"):
+            return json.dumps({"error": "manifest.yaml is managed by the forge pipeline. Write to plan/ files instead."})
+        path = self._resolve_path(input_data["directory"], rel_path)
         if path is None:
             return json.dumps({"error": "Invalid path or directory."})
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(input_data["content"], encoding="utf-8")
-            return json.dumps({"status": "ok", "path": input_data["path"]})
+            return json.dumps({"status": "ok", "path": rel_path})
         except Exception as e:
             return json.dumps({"error": str(e)})
 

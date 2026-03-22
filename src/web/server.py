@@ -296,6 +296,23 @@ async def status():
         except Exception:
             pass  # Fall back to alias/raw model name
 
+    # Estimate token usage
+    from src.utils.file_utils import estimate_tokens
+    lore_tokens = estimate_tokens(_orchestrator.librarian.system_prompt)
+    persona_tokens = estimate_tokens(_orchestrator.persona)
+    history_tokens = sum(
+        estimate_tokens(m["content"]) if isinstance(m["content"], str)
+        else estimate_tokens(str(m["content"]))
+        for m in _orchestrator.conversation_history
+    )
+
+    # Get context limit from the active provider
+    context_limit = 128000
+    if _registry:
+        alias = _config.models.orchestrator
+        if alias in _registry.providers:
+            context_limit = _registry.providers[alias].context_limit
+
     return {
         "status": "ready",
         "mode": _orchestrator.mode.value,
@@ -310,6 +327,10 @@ async def status():
         "layout": _config.layout.active,
         "ai_character": _config.roleplay.ai_character,
         "user_character": _config.roleplay.user_character,
+        "context_limit": context_limit,
+        "lore_tokens": lore_tokens,
+        "persona_tokens": persona_tokens,
+        "history_tokens": history_tokens,
     }
 
 
@@ -437,6 +458,9 @@ async def set_mode(request: ModeRequest):
         project = request.character
         config_path = Path(os.environ.get("CONFIG_PATH", "build/config.yaml"))
         _save_config_yaml(config_path, _config)
+
+    # Save current session before mode switch clears history
+    _auto_save()
 
     result = _orchestrator.set_mode(mode, project=project, file=request.file)
     return result
@@ -1817,9 +1841,59 @@ async def forge_status(project: str):
         return JSONResponse(status_code=404, content={"error": f"Project not found: {project}"})
 
 
+@app.post("/api/forge/{project}/design")
+async def forge_design(project: str):
+    """Run only the design phase (planner). Returns SSE stream."""
+    if _orchestrator is None or _config is None:
+        return JSONResponse(status_code=503, content={"error": "System not initialized"})
+
+    from src.services.forge import ForgeProject
+
+    fp = ForgeProject(project, _config)
+
+    queue: Queue = Queue()
+
+    def _run_design():
+        try:
+            librarian = Librarian(_config)
+            for event in fp.run_design(librarian):
+                queue.put(event)
+        except Exception as e:
+            queue.put({"event": "error", "message": str(e)})
+        finally:
+            queue.put(None)
+
+    loop = asyncio.get_event_loop()
+    loop.run_in_executor(None, _run_design)
+
+    async def event_generator():
+        while True:
+            try:
+                event = await loop.run_in_executor(None, partial(queue.get, timeout=120))
+            except Empty:
+                yield "event: ping\ndata: {}\n\n"
+                continue
+
+            if event is None:
+                break
+
+            event_type = event.pop("event", "progress")
+            yield f"event: {event_type}\ndata: {json.dumps(event)}\n\n"
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
 @app.post("/api/forge/{project}/start")
 async def forge_start(project: str):
-    """Start or resume the automated forge pipeline. Returns SSE stream."""
+    """Start or resume the writing pipeline (design must be done). Returns SSE stream."""
     if _orchestrator is None or _config is None:
         return JSONResponse(status_code=503, content={"error": "System not initialized"})
 

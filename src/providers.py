@@ -83,6 +83,7 @@ class ProviderConfig(BaseModel):
     models_url: str | None = None  # Custom URL for fetching model list
     api_key_encrypted: str | None = None
     selected_model: str = ""
+    context_limit: int = 128000  # Max context window tokens for the selected model
     options: ProviderOptions = ProviderOptions()
 
 
@@ -226,6 +227,7 @@ class ProviderRegistry:
                 "base_url": p.base_url,
                 "models_url": p.models_url or _default_models_url(p.type, p.base_url),
                 "selected_model": p.selected_model,
+                "context_limit": p.context_limit,
                 "api_key_set": p.api_key_encrypted is not None,
                 "options": opts if opts else None,
             })

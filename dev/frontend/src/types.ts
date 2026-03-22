@@ -38,6 +38,10 @@ export interface Status {
   model: string;
   conversation_turns: number;
   layout: string;
+  context_limit: number;
+  lore_tokens: number;
+  persona_tokens: number;
+  history_tokens: number;
 }
 
 export interface Profiles {

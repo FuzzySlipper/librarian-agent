@@ -62,6 +62,8 @@ function App() {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   // When true, the next response will be added as a variant to the last assistant message
   const addAsVariantRef = useRef(false);
+  const [elapsed, setElapsed] = useState(0);
+  const elapsedRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const refreshStatus = useCallback(() => {
     getStatus()
@@ -162,6 +164,9 @@ function App() {
   async function doSend(text: string) {
     setSending(true);
     setStreamStatus("Connecting...");
+    setElapsed(0);
+    if (elapsedRef.current) clearInterval(elapsedRef.current);
+    elapsedRef.current = setInterval(() => setElapsed((e) => e + 1), 1000);
     const abort = new AbortController();
     abortRef.current = abort;
 
@@ -283,6 +288,7 @@ function App() {
     } finally {
       setSending(false);
       abortRef.current = null;
+      if (elapsedRef.current) { clearInterval(elapsedRef.current); elapsedRef.current = null; }
     }
   }
 
@@ -573,6 +579,7 @@ function App() {
           <div className="flex items-center gap-2 text-text-muted italic text-sm px-4 py-2">
             <span className="inline-block w-2 h-2 rounded-full bg-accent animate-pulse" />
             <span>{streamStatus || "Working..."}</span>
+            <span className="text-text-muted/40 text-xs font-mono tabular-nums">{elapsed}s</span>
             <button
               onClick={handleStop}
               className="ml-auto text-xs bg-surface-alt hover:bg-border text-text-muted hover:text-text rounded px-2 py-1 transition-colors"

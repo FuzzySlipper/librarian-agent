@@ -341,7 +341,7 @@ const commands: Record<string, CommandDef> = {
 
   forge: {
     description: "Manage StoryForge projects",
-    usage: "new <name> | start <name> | status <name> | pause <name> | approve <name> | list",
+    usage: "new <name> | design <name> | start <name> | status <name> | pause <name> | approve <name> | list",
     handler: async (args, ctx) => {
       const parts = args.trim().split(/\s+/);
       const sub = parts[0]?.toLowerCase();
@@ -375,12 +375,19 @@ const commands: Record<string, CommandDef> = {
           const data = await res.json();
           if (data.status === "ok") {
             await ctx.setMode("forge" as Mode);
-            return { output: `Forge project **${name}** created. You're now in planning mode — describe your story idea.` };
+            return { output: `Forge project **${name}** created. You're now in planning mode — describe your story idea. When ready, run \`/forge design ${name}\` to generate the full story architecture.` };
           }
           return { output: data.error || "Failed to create project." };
         } catch {
           return { output: "Error creating forge project." };
         }
+      }
+
+      if (sub === "design") {
+        if (!name) return { output: "Usage: `/forge design <project-name>`" };
+        const { sendForgeDesignStream } = await import("./forge");
+        await ctx.streamRequest((onEvent, signal) => sendForgeDesignStream(name, onEvent, signal));
+        return { output: null, streaming: true };
       }
 
       if (sub === "start") {
@@ -430,13 +437,13 @@ const commands: Record<string, CommandDef> = {
         try {
           const res = await fetch(`/api/forge/${encodeURIComponent(name)}/approve`, { method: "POST" });
           const data = await res.json();
-          return { output: data.status === "ok" ? "Chapter 1 approved. Run `/forge start " + name + "` to continue." : data.error || "Failed." };
+          return { output: data.status === "ok" ? `Chapter 1 approved. Run \`/forge start ${name}\` to continue writing.` : data.error || "Failed." };
         } catch {
           return { output: "Error approving chapter." };
         }
       }
 
-      return { output: "Unknown subcommand. Usage: `/forge new|start|status|pause|approve|list`" };
+      return { output: "Unknown subcommand. Usage: `/forge new|design|start|status|pause|approve|list`" };
     },
   },
 };

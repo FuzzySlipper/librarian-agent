@@ -71,12 +71,124 @@ class ForgeProject:
         return self.manifest
 
     def load(self) -> ForgeManifest:
-        """Load manifest from disk."""
+        """Load manifest from disk, auto-fixing common schema issues."""
         if not self.manifest_path.exists():
             raise FileNotFoundError(f"No manifest for forge project: {self.name}")
-        raw = yaml.safe_load(self.manifest_path.read_text(encoding="utf-8"))
-        self.manifest = ForgeManifest(**raw)
+        raw = yaml.safe_load(self.manifest_path.read_text(encoding="utf-8")) or {}
+        raw = self._normalize_manifest(raw)
+        try:
+            self.manifest = ForgeManifest(**raw)
+        except Exception as e:
+            log.warning("Manifest validation failed, rebuilding from files: %s", e)
+            self.manifest = self._rebuild_manifest_from_files(raw)
         return self.manifest
+
+    def _normalize_manifest(self, raw: dict) -> dict:
+        """Fix common schema mismatches from LLM-generated manifests."""
+        # Fix stage values
+        stage_map = {
+            "active": "writing", "in-progress": "writing",
+            "planned": "planning", "complete": "done", "completed": "done",
+            "draft": "writing",
+        }
+        if raw.get("stage") in stage_map:
+            raw["stage"] = stage_map[raw["stage"]]
+        valid_stages = {"planning", "design", "writing", "quality", "assembly", "done"}
+        if raw.get("stage") not in valid_stages:
+            raw["stage"] = "planning"
+
+        # Fix chapter keys and statuses
+        status_map = {
+            "completed": "done", "complete": "done",
+            "in_progress": "writing", "in-progress": "writing",
+            "planned": "pending", "queued": "pending",
+            "draft": "writing", "drafted": "done",
+        }
+        if "chapters" in raw and isinstance(raw["chapters"], dict):
+            fixed_chapters = {}
+            for key, ch in raw["chapters"].items():
+                # Normalize key: "1" -> "ch-01", "ch-1" -> "ch-01"
+                norm_key = self._normalize_chapter_key(key)
+                if isinstance(ch, dict):
+                    if ch.get("status") in status_map:
+                        ch["status"] = status_map[ch["status"]]
+                    # Strip unknown fields that Pydantic won't accept
+                    valid_fields = {"status", "revision_count", "word_count", "scores", "feedback"}
+                    ch = {k: v for k, v in ch.items() if k in valid_fields}
+                    fixed_chapters[norm_key] = ch
+                else:
+                    fixed_chapters[norm_key] = {}
+            raw["chapters"] = fixed_chapters
+
+        # Strip extra top-level fields Pydantic won't accept
+        valid_top = {
+            "project_name", "stage", "chapter_count", "chapters",
+            "paused", "pause_after_ch1", "arc_type", "stats",
+            "created_at", "updated_at",
+        }
+        raw = {k: v for k, v in raw.items() if k in valid_top}
+
+        # Ensure project_name
+        raw.setdefault("project_name", self.name)
+
+        return raw
+
+    @staticmethod
+    def _normalize_chapter_key(key: str) -> str:
+        """Normalize chapter keys to 'ch-NN' format."""
+        key = str(key).strip()
+        # Already in correct format
+        if key.startswith("ch-") and len(key) >= 4:
+            return key
+        # Bare number: "1" -> "ch-01"
+        try:
+            num = int(key)
+            return f"ch-{num:02d}"
+        except ValueError:
+            pass
+        # "ch-1" -> "ch-01"
+        if key.startswith("ch-"):
+            try:
+                num = int(key[3:])
+                return f"ch-{num:02d}"
+            except ValueError:
+                pass
+        return key
+
+    def _rebuild_manifest_from_files(self, raw: dict) -> ForgeManifest:
+        """Build a valid manifest by scanning the project directory."""
+        now = _now()
+        ch_keys = self._discover_chapters()
+        chapters = {}
+        for ch_key in ch_keys:
+            draft = self.chapters_dir / f"{ch_key}-draft.md"
+            if draft.exists():
+                text = draft.read_text(encoding="utf-8")
+                chapters[ch_key] = ChapterStatus(status="done", word_count=len(text.split()))
+            else:
+                chapters[ch_key] = ChapterStatus()
+
+        # Determine stage from file state
+        stage = "planning"
+        if self._design_complete():
+            stage = "design"
+            if any(ch.status == "done" for ch in chapters.values()):
+                stage = "writing"
+
+        manifest = ForgeManifest(
+            project_name=self.name,
+            stage=stage,
+            chapter_count=len(ch_keys),
+            chapters=chapters,
+            pause_after_ch1=self.config.forge.pause_after_ch1,
+            created_at=raw.get("created_at", now),
+            updated_at=now,
+        )
+        # Save the fixed manifest
+        self.manifest = manifest
+        self._save_manifest()
+        log.info("Rebuilt manifest for %s: stage=%s, %d chapters", self.name, stage, len(ch_keys))
+        return manifest
 
     def _save_manifest(self) -> None:
         """Persist manifest to disk."""
@@ -155,15 +267,60 @@ class ForgeProject:
 
     # ── Pipeline entry point ─────────────────────────────────────────
 
+    def run_design(self, librarian) -> Generator[dict, None, None]:
+        """Run only the design stage (planner creates outline, style, briefs, lore).
+
+        Stops after design. User reviews output, then runs run_pipeline() to write.
+        """
+        if self.name in _running:
+            yield {"event": "error", "message": f"Pipeline already running for {self.name}"}
+            return
+
+        _running.add(self.name)
+        try:
+            self.load()
+            assert self.manifest is not None
+
+            if self._design_complete():
+                yield {"event": "stage", "stage": "design",
+                       "message": "Design files already exist. Review them and run `/forge start` when ready."}
+                # Still update manifest chapter count from briefs
+                ch_keys = self._discover_chapters()
+                self.manifest.chapter_count = len(ch_keys)
+                for ch_key in ch_keys:
+                    if ch_key not in self.manifest.chapters:
+                        self.manifest.chapters[ch_key] = ChapterStatus()
+                self._set_stage("design")
+                self._save_manifest()
+                return
+
+            self._set_stage("design")
+            self._record_timing("design", "start")
+            yield {"event": "stage", "stage": "design", "message": "Starting design phase..."}
+            yield from self._run_design(librarian)
+            self._record_timing("design", "end")
+
+            # Discover chapters from briefs
+            ch_keys = self._discover_chapters()
+            self.manifest.chapter_count = len(ch_keys)
+            for ch_key in ch_keys:
+                if ch_key not in self.manifest.chapters:
+                    self.manifest.chapters[ch_key] = ChapterStatus()
+            self._save_manifest()
+
+            yield {"event": "complete", "stage": "design",
+                   "message": f"Design complete — {len(ch_keys)} chapters planned. "
+                              f"Review the files in plan/ and chapters/, then run `/forge start` to begin writing."}
+        except Exception as e:
+            log.exception("Forge design error for %s", self.name)
+            yield {"event": "error", "message": str(e)}
+        finally:
+            _running.discard(self.name)
+
     def run_pipeline(self, librarian) -> Generator[dict, None, None]:
-        """Execute the automated pipeline (stages 2-5), yielding SSE events.
+        """Execute the writing pipeline (stages 3-5), yielding SSE events.
 
-        Args:
-            librarian: An initialized Librarian agent (will be refreshed
-                       before stage 3 to pick up new lore entries).
-
-        Yields:
-            dict events with 'event' key for SSE dispatch.
+        Design must be complete before calling this. If not, runs design first.
         """
         if self.name in _running:
             yield {"event": "error", "message": f"Pipeline already running for {self.name}"}

@@ -395,6 +395,7 @@ export interface ProviderInfo {
   base_url: string | null;
   models_url: string | null;
   selected_model: string;
+  context_limit?: number;
   api_key_set: boolean;
   used_by?: string[];
   options?: Record<string, unknown> | null;
@@ -412,6 +413,7 @@ export async function createProvider(provider: {
   models_url?: string | null;
   api_key?: string;
   selected_model: string;
+  context_limit?: number;
   options?: Record<string, unknown>;
 }): Promise<unknown> {
   return request("/api/providers", {
