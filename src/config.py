@@ -20,8 +20,13 @@ class LibrarianConfig(BaseModel):
 
 
 class ProseWriterConfig(BaseModel):
-    max_tokens_per_scene: int = 4096
+    max_tokens_per_scene: int = 16384
+    max_continuation_rounds: int = 3
     auto_append_to_story: bool = True
+
+
+class OrchestratorConfig(BaseModel):
+    max_tokens: int = 8192
 
 
 class PersonaConfig(BaseModel):
@@ -53,6 +58,16 @@ class RoleplayConfig(BaseModel):
     user_character: str | None = None  # Filename (without .yaml) of the user character card
 
 
+class WebSearchConfig(BaseModel):
+    provider: str | None = None  # "searxng", "tavily", "brave", "google" — None = disabled
+    searxng_url: str = "http://localhost:8888"  # SearXNG instance URL
+    tavily_api_key: str | None = None
+    brave_api_key: str | None = None
+    google_api_key: str | None = None
+    google_cx: str | None = None  # Google Custom Search engine ID
+    max_results: int = 5
+
+
 class LayoutPrefsConfig(BaseModel):
     active: str = "default"  # Layout name to load on startup
 
@@ -80,12 +95,14 @@ class AppConfig(BaseModel):
     provider: Literal["anthropic"] = "anthropic"
     user_agent: str = "NarrativeOrchestrator/1.0"
     models: ModelsConfig = Field(default_factory=ModelsConfig)
+    orchestrator: OrchestratorConfig = Field(default_factory=OrchestratorConfig)
     librarian: LibrarianConfig = Field(default_factory=LibrarianConfig)
     prose_writer: ProseWriterConfig = Field(default_factory=ProseWriterConfig)
     persona: PersonaConfig = Field(default_factory=PersonaConfig)
     lore: LoreConfig = Field(default_factory=LoreConfig)
     writing_style: WritingStyleConfig = Field(default_factory=WritingStyleConfig)
     layout: LayoutPrefsConfig = Field(default_factory=LayoutPrefsConfig)
+    web_search: WebSearchConfig = Field(default_factory=WebSearchConfig)
     roleplay: RoleplayConfig = Field(default_factory=RoleplayConfig)
     forge: ForgeConfig = Field(default_factory=ForgeConfig)
     paths: PathsConfig = Field(default_factory=PathsConfig)

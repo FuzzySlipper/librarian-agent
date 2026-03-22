@@ -483,6 +483,50 @@ async def new_session():
     return {"status": "ok", "message": "Session cleared"}
 
 
+@app.get("/api/conversation/history")
+async def conversation_history():
+    """Get the raw conversation history for debug inspection."""
+    if _orchestrator is None:
+        return JSONResponse(status_code=503, content={"error": "System not initialized"})
+
+    history = _orchestrator.conversation_history
+    # Summarize content blocks for readability
+    messages = []
+    for msg in history:
+        entry = {"role": msg["role"]}
+        content = msg.get("content", "")
+        if isinstance(content, str):
+            entry["content"] = content[:500] + ("..." if len(content) > 500 else "")
+            entry["length"] = len(content)
+        elif isinstance(content, list):
+            # Tool use/result blocks
+            blocks = []
+            for block in content:
+                if hasattr(block, "type"):
+                    # LLM response block object
+                    b = {"type": block.type}
+                    if block.type == "text":
+                        b["text"] = block.text[:200] + ("..." if len(block.text) > 200 else "")
+                    elif block.type == "tool_use":
+                        b["name"] = block.name
+                        b["input"] = block.input
+                    blocks.append(b)
+                elif isinstance(block, dict):
+                    b = {"type": block.get("type", "unknown")}
+                    if "tool_use_id" in block:
+                        b["tool_use_id"] = block["tool_use_id"]
+                        c = block.get("content", "")
+                        b["content"] = c[:200] + ("..." if len(c) > 200 else "")
+                    blocks.append(b)
+            entry["blocks"] = blocks
+        messages.append(entry)
+
+    return {
+        "count": len(history),
+        "messages": messages,
+    }
+
+
 class ConversationDeleteRequest(BaseModel):
     index: int  # 0-based index into conversation_history
 
@@ -496,7 +540,10 @@ async def conversation_delete(request: ConversationDeleteRequest):
     history = _orchestrator.conversation_history
     idx = request.index
     if idx < 0 or idx >= len(history):
-        return JSONResponse(status_code=400, content={"error": "Index out of range"})
+        log.warning("Delete request index %d out of range (history has %d messages)", idx, len(history))
+        return JSONResponse(status_code=400, content={
+            "error": f"Index {idx} out of range (history has {len(history)} messages)"
+        })
 
     msg = history[idx]
     if msg["role"] == "user":
@@ -1444,27 +1491,41 @@ def _save_config_yaml(config_path: Path, config: AppConfig):
     else:
         raw = {}
 
+    def _ensure_dict(key: str) -> dict:
+        """Ensure raw[key] is a dict, even if it was null/missing in YAML."""
+        if not isinstance(raw.get(key), dict):
+            raw[key] = {}
+        return raw[key]
+
     # Update models section
-    raw.setdefault("models", {})
-    raw["models"]["orchestrator"] = config.models.orchestrator
-    raw["models"]["prose_writer"] = config.models.prose_writer
-    raw["models"]["librarian"] = config.models.librarian
+    models = _ensure_dict("models")
+    models["orchestrator"] = config.models.orchestrator
+    models["prose_writer"] = config.models.prose_writer
+    models["librarian"] = config.models.librarian
 
     # Update layout
-    raw.setdefault("layout", {})
-    raw["layout"]["active"] = config.layout.active
+    layout = _ensure_dict("layout")
+    layout["active"] = config.layout.active
 
     # Update lore
-    raw.setdefault("lore", {})
-    raw["lore"]["active"] = config.lore.active
+    lore = _ensure_dict("lore")
+    lore["active"] = config.lore.active
 
     # Update roleplay character cards
-    raw.setdefault("roleplay", {})
-    raw["roleplay"]["ai_character"] = config.roleplay.ai_character
-    raw["roleplay"]["user_character"] = config.roleplay.user_character
+    roleplay = _ensure_dict("roleplay")
+    roleplay["ai_character"] = config.roleplay.ai_character
+    roleplay["user_character"] = config.roleplay.user_character
 
-    with open(config_path, "w") as f:
-        yaml.dump(raw, f, default_flow_style=False, sort_keys=False)
+    # Update web search (if configured)
+    if config.web_search.provider:
+        search = _ensure_dict("web_search")
+        search["provider"] = config.web_search.provider
+
+    try:
+        with open(config_path, "w") as f:
+            yaml.dump(raw, f, default_flow_style=False, sort_keys=False)
+    except Exception:
+        log.exception("Failed to save config to %s", config_path)
 
 
 # ── Artifact endpoints ────────────────────────────────────────────────

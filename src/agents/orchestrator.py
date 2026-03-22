@@ -265,6 +265,25 @@ ORCHESTRATOR_TOOLS = [
     },
 ]
 
+WEB_SEARCH_TOOL = {
+    "name": "web_search",
+    "description": (
+        "Search the web for real-world information — facts, research, references, "
+        "current events, or anything outside the story's lore corpus. Use this for "
+        "questions the Librarian can't answer because they're about the real world."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "query": {
+                "type": "string",
+                "description": "Web search query.",
+            },
+        },
+        "required": ["query"],
+    },
+}
+
 # ── Mode-specific system prompt sections ──────────────────────────────
 
 GENERAL_MODE_PROMPT = """## Mode: General
@@ -413,10 +432,22 @@ class Orchestrator:
         self.last_prompt: str | None = None      # For regenerate
         self.forge_project: str | None = None    # Active forge project name
 
+        # Web search (optional)
+        self.web_search = None
+        if config.web_search.provider:
+            from src.web_search import WebSearch
+            self.web_search = WebSearch(config.web_search)
+
+        # Build tools list — add web_search only if configured
+        self.tools = list(ORCHESTRATOR_TOOLS)
+        if self.web_search and self.web_search.enabled:
+            self.tools.append(WEB_SEARCH_TOOL)
+
         log.info(
-            "Orchestrator initialized (persona: %d tokens, model: %s)",
+            "Orchestrator initialized (persona: %d tokens, model: %s, web_search: %s)",
             estimate_tokens(self.persona),
             self.model,
+            config.web_search.provider or "disabled",
         )
 
     @staticmethod
@@ -669,10 +700,10 @@ class Orchestrator:
         while True:
             response = self.client.create(
                 model=self.model,
-                max_tokens=4096,
+                max_tokens=self.config.orchestrator.max_tokens,
                 system=system_prompt,
                 messages=messages,
-                tools=ORCHESTRATOR_TOOLS,
+                tools=self.tools,
             )
 
             if response.stop_reason == "end_turn":
@@ -701,7 +732,10 @@ class Orchestrator:
                 messages.append({"role": "user", "content": tool_results})
                 continue
 
-            log.warning("Unexpected stop_reason: %s", response.stop_reason)
+            if response.stop_reason == "max_tokens":
+                log.warning("Hit max_tokens limit — returning partial output")
+            else:
+                log.warning("Unexpected stop_reason: %s", response.stop_reason)
             response_text = self._extract_text(response)
             break
 
@@ -726,7 +760,7 @@ class Orchestrator:
         """
         yield from self.client.create_stream(
             model=self.model,
-            max_tokens=4096,
+            max_tokens=self.config.orchestrator.max_tokens,
             system=system_prompt,
             messages=messages,
             tools=tools,
@@ -769,7 +803,7 @@ class Orchestrator:
             yield {"event": "status", "message": f"Thinking... (step {loop_count})"}
 
             response = None
-            for chunk in self._call_llm_streaming(system_prompt, messages, ORCHESTRATOR_TOOLS):
+            for chunk in self._call_llm_streaming(system_prompt, messages, self.tools):
                 if chunk["type"] == "text_delta":
                     yield {"event": "text_delta", "text": chunk["text"]}
                 elif chunk["type"] == "reasoning_delta":
@@ -815,10 +849,19 @@ class Orchestrator:
                             "get_story_state": "Checking story state...",
                             "update_story_state": "Updating story state...",
                             "generate_image": "Generating image...",
+                            "web_search": f"Searching: {block.input.get('query', '...')[:50]}...",
                         }
                         yield {"event": "status", "message": tool_labels.get(block.name, f"Using {block.name}...")}
 
-                        result, rtype = self._execute_tool(block.name, block.input)
+                        # Collect sub-status messages from tools (e.g. prose writer lore lookups)
+                        sub_statuses: list[str] = []
+                        def _sub_status(msg: str) -> None:
+                            sub_statuses.append(msg)
+
+                        result, rtype = self._execute_tool(block.name, block.input, status_callback=_sub_status)
+                        # Yield any sub-status messages that accumulated
+                        for ss in sub_statuses:
+                            yield {"event": "status", "message": ss}
                         if rtype:
                             response_type = rtype
                         tool_results.append({
@@ -830,7 +873,10 @@ class Orchestrator:
                 messages.append({"role": "user", "content": tool_results})
                 continue
 
-            log.warning("Unexpected stop_reason: %s", response.stop_reason)
+            if response.stop_reason == "max_tokens":
+                log.warning("Hit max_tokens limit — returning partial output")
+            else:
+                log.warning("Unexpected stop_reason: %s", response.stop_reason)
             response_text = self._extract_text(response)
             break
 
@@ -879,7 +925,7 @@ class Orchestrator:
             yield {"event": "status", "message": f"Synthesizing... (step {loop_count})"}
 
             response = None
-            for chunk in self._call_llm_streaming(system_prompt, messages, ORCHESTRATOR_TOOLS):
+            for chunk in self._call_llm_streaming(system_prompt, messages, self.tools):
                 if chunk["type"] == "text_delta":
                     yield {"event": "text_delta", "text": chunk["text"]}
                 elif chunk["type"] == "reasoning_delta":
@@ -1064,6 +1110,7 @@ class Orchestrator:
         self,
         name: str,
         input_data: dict,
+        status_callback: "Callable[[str], None] | None" = None,
     ) -> tuple[str, str | None]:
         """Execute a tool call and return (result_string, optional_response_type)."""
         log.info("Tool call: %s", name)
@@ -1087,7 +1134,7 @@ class Orchestrator:
             old_auto = self.config.prose_writer.auto_append_to_story
             self.config.prose_writer.auto_append_to_story = False
             try:
-                result = self.writer.write_scene(input_data["description"], context)
+                result = self.writer.write_scene(input_data["description"], context, status_callback=status_callback)
             finally:
                 self.config.prose_writer.auto_append_to_story = old_auto
 
@@ -1127,6 +1174,9 @@ class Orchestrator:
         elif name == "generate_image":
             return self._tool_generate_image(input_data), None
 
+        elif name == "web_search":
+            return self._tool_web_search(input_data), None
+
         else:
             return json.dumps({"error": f"Unknown tool: {name}"}), None
 
@@ -1135,7 +1185,7 @@ class Orchestrator:
     def _dir_map(self) -> dict[str, Path]:
         """Map directory names to paths."""
         return {
-            "lore": self.config.paths.lore,
+            "lore": self.config.active_lore_path,
             "story": self.config.paths.story,
             "writing": self.config.paths.writing,
             "chats": self.config.paths.chats,
@@ -1422,6 +1472,14 @@ class Orchestrator:
                 "image_path": result.image_path,
             })
         return json.dumps({"status": "not_configured", "error": result.error})
+
+    def _tool_web_search(self, input_data: dict) -> str:
+        """Search the web via the configured search provider."""
+        if not self.web_search or not self.web_search.enabled:
+            return json.dumps({"error": "Web search not configured"})
+        from src.web_search import format_results_for_llm
+        response = self.web_search.search(input_data["query"])
+        return format_results_for_llm(response)
 
     # ── Utilities ─────────────────────────────────────────────────────
 

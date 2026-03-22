@@ -86,19 +86,35 @@ class ProseWriter:
             "natural stopping points."
         )
 
-    def write_scene(self, description: str, story_context: str = "") -> ProseResult:
-        """Generate a scene, automatically querying lore as needed."""
+    def write_scene(
+        self,
+        description: str,
+        story_context: str = "",
+        status_callback: "Callable[[str], None] | None" = None,
+    ) -> ProseResult:
+        """Generate a scene, automatically querying lore as needed.
+
+        Args:
+            status_callback: Optional function called with progress messages.
+        """
         log.info("Writing scene: %s", description[:100])
+
+        def _status(msg: str) -> None:
+            if status_callback:
+                status_callback(msg)
 
         system_prompt = self._build_system_prompt(story_context)
         messages: list[dict] = [{"role": "user", "content": description}]
         lore_queries: list[str] = []
+        max_tokens = self.config.prose_writer.max_tokens_per_scene
+
+        _status("Generating prose...")
 
         # Tool-use loop: model may call query_lore multiple times
         while True:
             response = self.client.create(
                 model=self.model,
-                max_tokens=self.config.prose_writer.max_tokens_per_scene,
+                max_tokens=max_tokens,
                 system=system_prompt,
                 messages=messages,
                 tools=[LORE_TOOL],
@@ -108,16 +124,14 @@ class ProseWriter:
                 break
 
             if response.stop_reason == "tool_use":
-                # Append assistant's response (contains tool_use blocks)
                 messages.append({"role": "assistant", "content": response.content})
 
-                # Process all tool calls in this response
                 tool_results = []
                 for block in response.content:
                     if block.type == "tool_use":
                         query = block.input["query"]
                         lore_queries.append(query)
-                        log.info("Lore query: %s", query)
+                        _status(f"Looking up: {query[:60]}...")
 
                         lore_bundle = self.librarian.query(query)
                         tool_results.append({
@@ -131,14 +145,44 @@ class ProseWriter:
                         })
 
                 messages.append({"role": "user", "content": tool_results})
+                _status("Writing...")
                 continue
 
-            # Unexpected stop reason — break to avoid infinite loop
+            if response.stop_reason == "max_tokens":
+                log.info("Hit max_tokens — attempting auto-continuation")
+                break
+
             log.warning("Unexpected stop_reason: %s", response.stop_reason)
             break
 
-        # Extract the final text from the response
+        # Extract text, then auto-continue if we hit max_tokens
         generated_text = self._extract_text(response)
+
+        if response.stop_reason == "max_tokens":
+            max_rounds = self.config.prose_writer.max_continuation_rounds
+            for cont_round in range(max_rounds):
+                _status(f"Continuing... ({cont_round + 2}/{max_rounds + 1})")
+                log.info("Auto-continuation round %d/%d", cont_round + 1, max_rounds)
+
+                # Send partial output back, ask model to continue
+                messages.append({"role": "assistant", "content": response.content})
+                messages.append({"role": "user", "content": "Continue from where you left off. Do not repeat any text already written."})
+
+                response = self.client.create(
+                    model=self.model,
+                    max_tokens=max_tokens,
+                    system=system_prompt,
+                    messages=messages,
+                )
+
+                continuation = self._extract_text(response)
+                if continuation.strip():
+                    generated_text += "\n\n" + continuation
+
+                if response.stop_reason != "max_tokens":
+                    break
+            else:
+                log.warning("Exhausted %d continuation rounds, returning what we have", max_rounds)
 
         result = ProseResult(
             generated_text=generated_text,

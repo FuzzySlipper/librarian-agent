@@ -482,8 +482,8 @@ function App() {
         }
       });
       refreshStatus();
-    } catch {
-      // Failed to delete
+    } catch (err) {
+      addSystemMessage(`Failed to delete message: ${err instanceof Error ? err.message : "unknown error"}`);
     }
   }
 
@@ -569,10 +569,10 @@ function App() {
             onFork={msg.role !== "system" ? handleForkMessage : undefined}
           />
         ))}
-        {sending && streamStatus && (
+        {sending && (
           <div className="flex items-center gap-2 text-text-muted italic text-sm px-4 py-2">
             <span className="inline-block w-2 h-2 rounded-full bg-accent animate-pulse" />
-            <span>{streamStatus}</span>
+            <span>{streamStatus || "Working..."}</span>
             <button
               onClick={handleStop}
               className="ml-auto text-xs bg-surface-alt hover:bg-border text-text-muted hover:text-text rounded px-2 py-1 transition-colors"
