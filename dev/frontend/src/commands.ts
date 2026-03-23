@@ -478,3 +478,8 @@ export async function executeCommand(
 export function getCommandNames(): string[] {
   return Object.keys(commands).sort();
 }
+
+export function getCommandUsage(name: string): string | undefined {
+  const cmd = commands[name];
+  return cmd?.usage;
+}

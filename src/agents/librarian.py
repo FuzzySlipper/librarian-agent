@@ -81,32 +81,40 @@ class Librarian:
         lore_content = "\n\n---\n\n".join(sections) if sections else "(No lore files found)"
         return LIBRARIAN_SYSTEM_TEMPLATE.format(lore_content=lore_content)
 
-    def query(self, query: str) -> LoreBundle:
+    def query(self, query: str, max_retries: int | None = None) -> LoreBundle:
         """Query the lore corpus and return structured results."""
         log.debug("Librarian query: %s", query)
-
-        response = self.client.create(
-            model=self.model,
-            max_tokens=self.config.librarian.max_tokens_per_query,
-            system=[{
-                "type": "text",
-                "text": self.system_prompt,
-                "cache_control": {"type": "ephemeral"},
-            }],
-            messages=[{"role": "user", "content": query}],
-        )
-
         from src.utils.safe import safe_first_text
-        raw_text = safe_first_text(response.content, context=f"librarian query: {query[:80]}")
+        retries = max_retries if max_retries is not None else self.config.librarian.max_retries
 
-        if not raw_text.strip():
-            return LoreBundle(
-                relevant_passages=["No information found for this query."],
-                source_files=[],
-                confidence="low",
+        for attempt in range(retries + 1):
+            response = self.client.create(
+                model=self.model,
+                max_tokens=self.config.librarian.max_tokens_per_query,
+                system=[{
+                    "type": "text",
+                    "text": self.system_prompt,
+                    "cache_control": {"type": "ephemeral"},
+                }],
+                messages=[{"role": "user", "content": query}],
             )
 
-        return self._parse_response(raw_text)
+            raw_text = safe_first_text(response.content, context=f"librarian query: {query[:80]}")
+
+            if raw_text.strip():
+                return self._parse_response(raw_text)
+
+            if attempt < retries:
+                log.warning("Librarian empty response (attempt %d/%d), retrying: %s",
+                            attempt + 1, retries + 1, query[:80])
+                import time
+                time.sleep(1)  # Brief pause before retry
+
+        return LoreBundle(
+            relevant_passages=["No information found for this query."],
+            source_files=[],
+            confidence="low",
+        )
 
     def _parse_response(self, raw_text: str) -> LoreBundle:
         """Parse the LLM's JSON response into a LoreBundle."""

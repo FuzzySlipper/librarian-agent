@@ -1325,7 +1325,7 @@ class Orchestrator:
         log.info("Delegating technical query: %s", input_data["query"][:100])
         response = self.client.create(
             model=self.model,
-            max_tokens=2048,
+            max_tokens=self.config.orchestrator.delegate_max_tokens,
             system="You are a helpful technical assistant. Answer accurately and concisely.",
             messages=[{"role": "user", "content": input_data["query"]}],
         )

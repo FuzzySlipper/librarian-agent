@@ -66,7 +66,7 @@ function PanelSlot({
       <div
         className="h-full w-full"
         style={{
-          backgroundImage: panel.src ? `url(${panel.src})` : undefined,
+          backgroundImage: panel.src ? `url(${encodeURI(panel.src)})` : undefined,
           backgroundSize: panel.fit || "cover",
           backgroundPosition: panel.position || "center center",
           backgroundRepeat: "no-repeat",
@@ -107,7 +107,7 @@ export default function LayoutShell({ layout, chatContent, artifact, backgroundI
 
   const bgStyle: React.CSSProperties = backgroundImage
     ? {
-        backgroundImage: `url(${backgroundImage})`,
+        backgroundImage: `url(${encodeURI(backgroundImage)})`,
         backgroundSize: "cover",
         backgroundPosition: "center center",
         backgroundRepeat: "no-repeat",

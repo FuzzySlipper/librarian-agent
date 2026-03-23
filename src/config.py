@@ -6,6 +6,25 @@ from typing import Literal
 
 import yaml
 from dotenv import load_dotenv
+from pydantic import field_validator
+
+import logging
+
+_log = logging.getLogger(__name__)
+
+# Max sane value for any token/count config — prevents int overflow or API rejection
+_MAX_SAFE = 1_000_000
+
+
+def _clamp_tokens(v: int, field_name: str, minimum: int = 1) -> int:
+    """Clamp a config integer to a safe range, logging if corrected."""
+    if v < minimum:
+        _log.warning("Config %s=%d too low, clamping to %d", field_name, v, minimum)
+        return minimum
+    if v > _MAX_SAFE:
+        _log.warning("Config %s=%d too high, clamping to %d", field_name, v, _MAX_SAFE)
+        return _MAX_SAFE
+    return v
 from pydantic import BaseModel, Field
 
 
@@ -17,6 +36,12 @@ class ModelsConfig(BaseModel):
 
 class LibrarianConfig(BaseModel):
     max_tokens_per_query: int = 1024
+    max_retries: int = 2  # Retry on empty responses
+
+    @field_validator("max_tokens_per_query", "max_retries")
+    @classmethod
+    def _clamp_librarian(cls, v: int, info) -> int:
+        return _clamp_tokens(v, info.field_name)
 
 
 class ProseWriterConfig(BaseModel):
@@ -24,9 +49,20 @@ class ProseWriterConfig(BaseModel):
     max_continuation_rounds: int = 3
     auto_append_to_story: bool = True
 
+    @field_validator("max_tokens_per_scene", "max_continuation_rounds")
+    @classmethod
+    def _clamp_writer(cls, v: int, info) -> int:
+        return _clamp_tokens(v, info.field_name)
+
 
 class OrchestratorConfig(BaseModel):
     max_tokens: int = 8192
+    delegate_max_tokens: int = 2048  # For delegate_technical tool
+
+    @field_validator("max_tokens", "delegate_max_tokens")
+    @classmethod
+    def _clamp_orchestrator(cls, v: int, info) -> int:
+        return _clamp_tokens(v, info.field_name)
 
 
 class PersonaConfig(BaseModel):
@@ -46,11 +82,23 @@ class ForgeConfig(BaseModel):
     max_revisions: int = 3
     review_threshold: float = 7.0
     chapter_max_tokens: int = 8192
+    planner_max_tokens: int = 16384
+    reviewer_max_tokens: int = 4096
     pause_after_ch1: bool = True
     quality_pass: bool = True
     writer_model: str | None = None    # None = use models.prose_writer
     reviewer_model: str | None = None  # None = use models.librarian (cost-effective)
     planner_model: str | None = None   # None = use models.orchestrator
+
+    @field_validator("max_revisions", "chapter_max_tokens", "planner_max_tokens", "reviewer_max_tokens")
+    @classmethod
+    def _clamp_forge(cls, v: int, info) -> int:
+        return _clamp_tokens(v, info.field_name)
+
+    @field_validator("review_threshold")
+    @classmethod
+    def _clamp_threshold(cls, v: float) -> float:
+        return max(0.0, min(v, 10.0))
 
 
 class RoleplayConfig(BaseModel):

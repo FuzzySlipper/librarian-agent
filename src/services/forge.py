@@ -437,6 +437,7 @@ class ForgeProject:
             lore_dir=self.config.active_lore_path,
             prompts_dir=self.config.paths.forge_prompts,
             model=planner_model,
+            max_tokens=self.config.forge.planner_max_tokens,
             stats_callback=self._bump_stats,
             client=client,
         ):
@@ -530,6 +531,7 @@ class ForgeProject:
                     prompts_dir=self.config.paths.forge_prompts,
                     model=reviewer_model,
                     threshold=threshold,
+                    max_tokens=self.config.forge.reviewer_max_tokens,
                     client=client,
                 )
                 self._bump_stats(**review_stats)

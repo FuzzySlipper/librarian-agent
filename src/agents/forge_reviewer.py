@@ -151,6 +151,7 @@ def review_chapter(
     prompts_dir: Path,
     model: str,
     threshold: float = 7.0,
+    max_tokens: int = 4096,
     client=None,
 ) -> tuple[ReviewResult, dict]:
     """Review a single chapter draft against its brief.
@@ -180,7 +181,7 @@ def review_chapter(
         # Use the provided LLM client
         response = client.create(
             model=model,
-            max_tokens=2048,
+            max_tokens=max_tokens,
             system=system_prompt,
             messages=[{"role": "user", "content": user_prompt}],
         )
@@ -200,7 +201,7 @@ def review_chapter(
             prompt=user_prompt,
             provider=Provider.ANTHROPIC,
             model=model,
-            max_tokens=2048,
+            max_tokens=max_tokens,
             temperature=0.3,
         ))
         result_text = delegate_result.text

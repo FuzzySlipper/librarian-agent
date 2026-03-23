@@ -132,6 +132,7 @@ def run_planner(
     lore_dir: Path,
     prompts_dir: Path,
     model: str,
+    max_tokens: int = 16384,
     stats_callback: Callable | None = None,
     client: LLMClient | None = None,
 ) -> Generator[dict, None, None]:
@@ -158,7 +159,7 @@ def run_planner(
     while True:
         response = client.create(
             model=model,
-            max_tokens=16384,
+            max_tokens=max_tokens,
             system=system_prompt,
             messages=messages,
             tools=PLANNER_TOOLS,
