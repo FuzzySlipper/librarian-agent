@@ -321,6 +321,9 @@ function App() {
           // Reuse the same streaming UI as doSend
           setSending(true);
           setStreamStatus("Connecting...");
+          setElapsed(0);
+          if (elapsedRef.current) clearInterval(elapsedRef.current);
+          elapsedRef.current = setInterval(() => setElapsed((e) => e + 1), 1000);
           const abort = new AbortController();
           abortRef.current = abort;
 
@@ -357,6 +360,7 @@ function App() {
           } finally {
             setSending(false);
             abortRef.current = null;
+            if (elapsedRef.current) { clearInterval(elapsedRef.current); elapsedRef.current = null; }
           }
         },
       };

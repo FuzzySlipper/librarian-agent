@@ -96,7 +96,15 @@ class Librarian:
             messages=[{"role": "user", "content": query}],
         )
 
-        raw_text = response.content[0].text
+        from src.utils.safe import safe_first_text
+        raw_text = safe_first_text(response.content, context=f"librarian query: {query[:80]}")
+
+        if not raw_text.strip():
+            return LoreBundle(
+                relevant_passages=["No information found for this query."],
+                source_files=[],
+                confidence="low",
+            )
 
         return self._parse_response(raw_text)
 

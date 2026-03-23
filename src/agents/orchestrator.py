@@ -1329,7 +1329,8 @@ class Orchestrator:
             system="You are a helpful technical assistant. Answer accurately and concisely.",
             messages=[{"role": "user", "content": input_data["query"]}],
         )
-        return response.content[0].text
+        from src.utils.safe import safe_first_text
+        return safe_first_text(response.content, default="Unable to answer.", context="delegate_technical")
 
     # ── Dice and state tools ─────────────────────────────────────────
 

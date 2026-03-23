@@ -122,7 +122,10 @@ class ProseWriter:
                 break
 
             if response.stop_reason == "tool_use":
-                messages.append({"role": "assistant", "content": response.content})
+                asst_msg = {"role": "assistant", "content": response.content}
+                if response.reasoning:
+                    asst_msg["reasoning"] = response.reasoning
+                messages.append(asst_msg)
 
                 tool_results = []
                 for block in response.content:

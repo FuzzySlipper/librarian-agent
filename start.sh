@@ -91,17 +91,28 @@ else
     "$VENV_DIR/bin/pip" install -r "$DEV_DIR/requirements.txt" --quiet
 fi
 
-# ── Frontend build (optional) ───────────────────────────────────
-if $BUILD_FRONTEND; then
-    if command -v npm &>/dev/null; then
-        echo "Building frontend..."
-        (cd "$DEV_DIR/frontend" && npm install && npm run build)
-        rm -rf "$STATIC_DIR"
-        cp -r "$DEV_DIR/frontend/dist" "$STATIC_DIR"
-        echo "Frontend built to $STATIC_DIR/"
-    else
-        echo "Warning: npm not found. Cannot build frontend."
-        echo "Install Node.js or use the pre-built static/ directory."
+# ── Frontend build ────────────────────────────────────────────────
+# Auto-detect if frontend source changed since last build
+FRONTEND_HASH_FILE="$STATIC_DIR/.frontend-hash"
+if [ -d "$DEV_DIR/frontend/src" ]; then
+    CURRENT_HASH=$(find "$DEV_DIR/frontend/src" -type f -name '*.ts' -o -name '*.tsx' -o -name '*.css' | sort | xargs cat 2>/dev/null | md5sum | cut -d' ' -f1)
+    LAST_HASH=""
+    if [ -f "$FRONTEND_HASH_FILE" ]; then
+        LAST_HASH=$(cat "$FRONTEND_HASH_FILE")
+    fi
+
+    if $BUILD_FRONTEND || { $DO_UPDATE && [ "$CURRENT_HASH" != "$LAST_HASH" ]; }; then
+        if command -v npm &>/dev/null; then
+            echo "Building frontend..."
+            (cd "$DEV_DIR/frontend" && npm install --silent && npm run build)
+            rm -rf "$STATIC_DIR"
+            cp -r "$DEV_DIR/frontend/dist" "$STATIC_DIR"
+            echo "$CURRENT_HASH" > "$FRONTEND_HASH_FILE"
+            echo "Frontend built to $STATIC_DIR/"
+        else
+            echo "Warning: npm not found. Cannot build frontend."
+            echo "Install Node.js or use the pre-built static/ directory."
+        fi
     fi
 fi
 

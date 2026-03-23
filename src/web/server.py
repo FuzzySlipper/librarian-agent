@@ -431,6 +431,21 @@ def _reinitialize_agents():
     )
 
 
+def _resolve_forge_models() -> dict[str, str]:
+    """Resolve forge model aliases to actual model IDs via the registry."""
+    if not _registry or not _config:
+        return {}
+    resolved = {}
+    for role, alias in [
+        ("planner", _config.forge.planner_model or _config.models.orchestrator),
+        ("writer", _config.forge.writer_model or _config.models.prose_writer),
+        ("reviewer", _config.forge.reviewer_model or _config.models.librarian),
+        ("librarian", _config.models.librarian),
+    ]:
+        resolved[role] = _registry.get_model(alias)
+    return resolved
+
+
 class ModeRequest(BaseModel):
     mode: str  # "general", "writer", "roleplay", "forge"
     project: str | None = None
@@ -1857,9 +1872,13 @@ async def forge_design(project: str):
     def _run_design():
         try:
             # Get client from provider registry so forge uses configured provider
+            # Also resolve model aliases to actual model IDs
             client = _registry.get_client(_config.models.orchestrator) if _registry else None
-            librarian = Librarian(_config, client=client)
-            for event in fp.run_design(librarian, client=client):
+            resolved_models = _resolve_forge_models() if _registry else {}
+            librarian_client = _registry.get_client(_config.models.librarian) if _registry else client
+            librarian_model = resolved_models.get("librarian")
+            librarian = Librarian(_config, client=librarian_client, model=librarian_model)
+            for event in fp.run_design(librarian, client=client, resolved_models=resolved_models):
                 queue.put(event)
         except Exception as e:
             queue.put({"event": "error", "message": str(e)})
@@ -1910,8 +1929,11 @@ async def forge_start(project: str):
         """Run the forge pipeline in a thread, pushing events to the queue."""
         try:
             client = _registry.get_client(_config.models.orchestrator) if _registry else None
-            librarian = Librarian(_config, client=client)
-            for event in fp.run_pipeline(librarian, client=client):
+            resolved_models = _resolve_forge_models() if _registry else {}
+            librarian_client = _registry.get_client(_config.models.librarian) if _registry else client
+            librarian_model = resolved_models.get("librarian")
+            librarian = Librarian(_config, client=librarian_client, model=librarian_model)
+            for event in fp.run_pipeline(librarian, client=client, resolved_models=resolved_models):
                 queue.put(event)
         except Exception as e:
             queue.put({"event": "error", "message": str(e)})

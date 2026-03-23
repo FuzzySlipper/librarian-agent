@@ -5,9 +5,7 @@
 import type { StreamEvent } from "./api";
 
 /**
- * Stream the forge pipeline execution via SSE.
- * Maps forge-specific events into the standard StreamEvent format
- * that the App's streamRequest handler understands.
+ * Stream a forge endpoint via SSE, accumulating progress into a visible log.
  */
 export async function sendForgeDesignStream(
   project: string,
@@ -49,6 +47,7 @@ async function _streamForgeEndpoint(
 
   const decoder = new TextDecoder();
   let buffer = "";
+  const progressLog: string[] = [];
 
   while (true) {
     const { done, value } = await reader.read();
@@ -67,7 +66,7 @@ async function _streamForgeEndpoint(
       } else if (line.startsWith("data: ")) {
         try {
           const data = JSON.parse(line.slice(6));
-          const mapped = _mapForgeEvent(currentEventType, data);
+          const mapped = _mapForgeEvent(currentEventType, data, progressLog);
           onEvent(mapped);
         } catch {
           // Skip malformed data
@@ -78,50 +77,55 @@ async function _streamForgeEndpoint(
 }
 
 /**
- * Map forge pipeline SSE events into the StreamEvent format
- * used by the App's message display.
+ * Map forge pipeline SSE events into the StreamEvent format.
+ * Progress events accumulate into a log that streams as text_delta.
  */
 function _mapForgeEvent(
   eventType: string,
   data: Record<string, unknown>,
+  progressLog: string[],
 ): StreamEvent {
   switch (eventType) {
-    case "stage":
-      return { type: "status", data: { message: data.message } };
+    case "stage": {
+      const msg = data.message as string;
+      progressLog.push(`**${msg}**`);
+      // Send as both status (for the status bar) and text_delta (for the message)
+      return { type: "text_delta", data: { text: (progressLog.length > 1 ? "\n" : "") + `**${msg}**\n` } };
+    }
 
-    case "progress":
-      return {
-        type: "status",
-        data: { message: (data.message as string) || `${data.action} ${data.chapter ?? ""}`.trim() },
-      };
+    case "progress": {
+      const msg = (data.message as string) || `${data.action} ${data.chapter ?? ""}`.trim();
+      progressLog.push(`- ${msg}`);
+      return { type: "text_delta", data: { text: `- ${msg}\n` } };
+    }
 
-    case "chapter":
-      return {
-        type: "status",
-        data: { message: `${data.chapter} — ${data.status} (${data.word_count} words)` },
-      };
+    case "chapter": {
+      const msg = `${data.chapter} — ${data.status} (${data.word_count} words)`;
+      progressLog.push(`- ${msg}`);
+      return { type: "text_delta", data: { text: `- ${msg}\n` } };
+    }
 
-    case "stats":
-      return {
-        type: "status",
-        data: {
-          message: `${data.chapters_complete}/${data.chapters_total} chapters, ${Number(data.total_tokens).toLocaleString()} tokens`,
-        },
-      };
+    case "stats": {
+      const msg = `${data.chapters_complete}/${data.chapters_total} chapters, ${Number(data.total_tokens).toLocaleString()} tokens`;
+      progressLog.push(`\n*${msg}*`);
+      return { type: "text_delta", data: { text: `\n*${msg}*\n` } };
+    }
 
     case "pause":
       return {
         type: "done",
-        data: { content: data.message, response_type: "confirmation" },
+        data: { content: progressLog.join("\n") + `\n\n${data.message}`, response_type: "confirmation" },
       };
 
     case "complete":
       return {
         type: "done",
         data: {
-          content: data.output_path
-            ? `StoryForge complete! Output: \`${data.output_path}\``
-            : (data.message as string) || "Stage complete.",
+          content: progressLog.join("\n") + "\n\n" + (
+            data.output_path
+              ? `StoryForge complete! Output: \`${data.output_path}\``
+              : (data.message as string) || "Stage complete."
+          ),
           response_type: "confirmation",
         },
       };

@@ -137,16 +137,13 @@ class ForgeProject:
     def _normalize_chapter_key(key: str) -> str:
         """Normalize chapter keys to 'ch-NN' format."""
         key = str(key).strip()
-        # Already in correct format
-        if key.startswith("ch-") and len(key) >= 4:
-            return key
         # Bare number: "1" -> "ch-01"
         try:
             num = int(key)
             return f"ch-{num:02d}"
         except ValueError:
             pass
-        # "ch-1" -> "ch-01"
+        # "ch-1" or "ch-01" -> "ch-01" (always zero-pad)
         if key.startswith("ch-"):
             try:
                 num = int(key[3:])
@@ -267,12 +264,13 @@ class ForgeProject:
 
     # ── Pipeline entry point ─────────────────────────────────────────
 
-    def run_design(self, librarian, client=None) -> Generator[dict, None, None]:
+    def run_design(self, librarian, client=None, resolved_models: dict | None = None) -> Generator[dict, None, None]:
         """Run only the design stage (planner creates outline, style, briefs, lore).
 
         Args:
             librarian: Initialized Librarian agent.
             client: LLMClient to use. If None, agents fall back to their defaults.
+            resolved_models: Dict mapping role names to actual model IDs (not aliases).
 
         Stops after design. User reviews output, then runs run_pipeline() to write.
         """
@@ -301,7 +299,7 @@ class ForgeProject:
             self._set_stage("design")
             self._record_timing("design", "start")
             yield {"event": "stage", "stage": "design", "message": "Starting design phase..."}
-            yield from self._run_design(librarian, client=client)
+            yield from self._run_design(librarian, client=client, resolved_models=resolved_models)
             self._record_timing("design", "end")
 
             # Discover chapters from briefs
@@ -321,7 +319,7 @@ class ForgeProject:
         finally:
             _running.discard(self.name)
 
-    def run_pipeline(self, librarian, client=None) -> Generator[dict, None, None]:
+    def run_pipeline(self, librarian, client=None, resolved_models: dict | None = None) -> Generator[dict, None, None]:
         """Execute the writing pipeline (stages 3-5), yielding SSE events.
 
         Design must be complete before calling this. If not, runs design first.
@@ -333,14 +331,14 @@ class ForgeProject:
         _running.add(self.name)
         try:
             self.load()
-            yield from self._run_pipeline_inner(librarian, client=client)
+            yield from self._run_pipeline_inner(librarian, client=client, resolved_models=resolved_models)
         except Exception as e:
             log.exception("Forge pipeline error for %s", self.name)
             yield {"event": "error", "message": str(e)}
         finally:
             _running.discard(self.name)
 
-    def _run_pipeline_inner(self, librarian, client=None) -> Generator[dict, None, None]:
+    def _run_pipeline_inner(self, librarian, client=None, resolved_models: dict | None = None) -> Generator[dict, None, None]:
         assert self.manifest is not None
 
         # ── Stage 2: Design ──────────────────────────────────────────
@@ -348,7 +346,7 @@ class ForgeProject:
             self._set_stage("design")
             self._record_timing("design", "start")
             yield {"event": "stage", "stage": "design", "message": "Starting design phase..."}
-            yield from self._run_design(librarian, client=client)
+            yield from self._run_design(librarian, client=client, resolved_models=resolved_models)
             self._record_timing("design", "end")
 
             # Reload chapter count from briefs
@@ -373,7 +371,7 @@ class ForgeProject:
             self._set_stage("writing")
             self._record_timing("writing", "start")
             yield {"event": "stage", "stage": "writing", "message": "Starting writing phase..."}
-            yield from self._run_writing(librarian, client=client)
+            yield from self._run_writing(librarian, client=client, resolved_models=resolved_models)
             self._record_timing("writing", "end")
 
             if self.manifest.paused:
@@ -408,9 +406,11 @@ class ForgeProject:
 
     # ── Stage 2: Design ──────────────────────────────────────────────
 
-    def _run_design(self, librarian, client=None) -> Generator[dict, None, None]:
+    def _run_design(self, librarian, client=None, resolved_models: dict | None = None) -> Generator[dict, None, None]:
         """Run the planner agent to produce outline, style, bible, and chapter briefs."""
         from src.agents.forge_planner import run_planner
+
+        rm = resolved_models or {}
 
         # Gather all stage 1 inputs
         premise_path = self.plan_dir / "premise.md"
@@ -425,7 +425,7 @@ class ForgeProject:
                 rel = md_file.relative_to(lore_dir)
                 lore_context += f"\n\n--- {rel} ---\n{content}"
 
-        planner_model = self.config.forge.planner_model or self.config.models.orchestrator
+        planner_model = rm.get("planner") or self.config.forge.planner_model or self.config.models.orchestrator
 
         yield {"event": "progress", "action": "design", "message": "Planner agent working..."}
 
@@ -451,19 +451,20 @@ class ForgeProject:
 
     # ── Stage 3: Writing ─────────────────────────────────────────────
 
-    def _run_writing(self, librarian, client=None) -> Generator[dict, None, None]:
+    def _run_writing(self, librarian, client=None, resolved_models: dict | None = None) -> Generator[dict, None, None]:
         """Write chapters one by one with review/revise loop."""
         from src.agents.forge_reviewer import review_chapter
         from src.agents.forge_writer import write_chapter
 
+        rm = resolved_models or {}
         assert self.manifest is not None
 
         # Load the style doc for the writing prompt
         style_path = self.plan_dir / "style.md"
         style_doc = style_path.read_text(encoding="utf-8") if style_path.exists() else ""
 
-        writer_model = self.config.forge.writer_model or self.config.models.prose_writer
-        reviewer_model = self.config.forge.reviewer_model or self.config.models.librarian
+        writer_model = rm.get("writer") or self.config.forge.writer_model or self.config.models.prose_writer
+        reviewer_model = rm.get("reviewer") or self.config.forge.reviewer_model or self.config.models.librarian
         max_revisions = self.config.forge.max_revisions
         threshold = self.config.forge.review_threshold
 

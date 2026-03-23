@@ -24,7 +24,10 @@ A purpose-built creative writing system replacing SillyTavern. Instead of a chat
 - **Pydantic** for data validation and configuration
 
 ### LLM Integration
-- **Anthropic SDK** as primary provider (provider swapping deferred — see ADR-007)
+- **LLMClient abstraction** (`src/llm.py`) with Anthropic and OpenAI backends
+- All agents use `client.create()` / `client.create_stream()` — never raw SDK calls
+- **Provider registry** (`src/providers.py`) manages configured providers via the web UI
+- Agents receive their client from the server — never construct their own
 - **Prompt caching** is a core architectural feature — design for it
 - Model selection via `config.yaml` (different models per agent allowed)
 
@@ -238,7 +241,91 @@ The `build/` directory is created by `dev/setup.sh` on first run. It copies defa
 4. **Don't cache lore in vector DB** — Load files into system prompt for prompt caching
 5. **Don't build a chat history system** — The story file IS the history
 6. **Don't make the web UI complex** — Text in, text out, mobile-friendly
-7. **Don't build provider abstraction prematurely** — Build against Anthropic SDK, abstract when needed
+7. **Don't bypass the LLM abstraction** — All LLM calls go through `LLMClient`. Never create `anthropic.Anthropic()` or `openai.OpenAI()` directly in agent code. Agents that need a fallback should raise `RuntimeError` pointing users to the Model settings UI.
+
+## Testing
+
+### Running Tests
+
+```bash
+# Unit tests (no external dependencies)
+.venv/bin/python -m pytest tests/ -v
+
+# Include LLM integration tests (requires local Ollama)
+.venv/bin/python -m pytest tests/ --run-llm -v
+```
+
+### Test Architecture
+
+Tests live in `tests/` and use pytest. There are two categories:
+
+**Unit tests** — Pure logic, no LLM or network calls. These should always pass.
+- `test_config.py` — Config loading, defaults, YAML edge cases, path resolution
+- `test_forge_manifest.py` — Manifest normalization, chapter key/status mapping, rebuild from files
+- `test_character_cards.py` — Card CRUD, PNG parsing, SillyTavern import
+- `test_librarian_parsing.py` — JSON extraction from various LLM response formats
+- `test_web_search.py` — Search result formatting, disabled provider handling
+- `test_layout.py` — Layout config defaults
+
+**Integration tests** (`test_llm_integration.py`) — Require a local model via Ollama.
+- Skipped by default, enabled with `--run-llm` flag
+- Configure with env vars: `LLM_TEST_BASE_URL`, `LLM_TEST_MODEL`
+- Default: `http://localhost:11434/v1` with `qwen2.5:3b`
+- Tests: basic completion, tool calling, streaming, multi-turn context
+
+### Testing Guidelines
+
+1. **Test the logic, not the LLM.** Most bugs are in parsing, normalization, path resolution, and state management — not in the model's output. Mock or skip LLM calls in unit tests.
+
+2. **Use `tmp_path` for file operations.** Never write to `build/` in tests. The `sample_config` fixture in `conftest.py` provides an `AppConfig` pointing at temp directories.
+
+3. **Test edge cases from real usage.** When a user reports a bug (e.g., LLM writes manifest with wrong field names), add a test that reproduces the exact input and verifies the fix. The forge manifest tests came directly from real malformed manifests.
+
+4. **New features need tests for:**
+   - Config validation (new fields have correct defaults, load from YAML)
+   - Input normalization (anything that cleans up LLM output or user input)
+   - Error paths (what happens when files are missing, API returns errors)
+   - Round-trip consistency (save → load produces the same data)
+
+5. **Don't test internal implementation details.** Test behavior: "given this manifest, loading produces these chapter statuses" — not "the third line of `_normalize_manifest` sets the right variable."
+
+6. **Integration tests should be resilient.** Local models are unpredictable — assert structure (response has content, tool call has name) not exact text. Use `assert "Alice" in response` not `assert response == "Your name is Alice."`.
+
+7. **Keep tests fast.** Unit tests should complete in under 1 second total. Integration tests can take longer but should each complete within 30 seconds.
+
+### Adding Tests for Bug Fixes
+
+When fixing a bug:
+1. Write a test that reproduces the bug (it should fail before the fix)
+2. Apply the fix
+3. Verify the test passes
+
+Example from manifest normalization:
+```python
+def test_normalize_stage_active_becomes_writing(sample_config):
+    """Bug: LLM wrote 'stage: active' which isn't a valid Pydantic literal."""
+    fp = ForgeProject("test", sample_config)
+    raw = {"project_name": "test", "stage": "active"}
+    result = fp._normalize_manifest(raw)
+    assert result["stage"] == "writing"
+```
+
+### Local LLM Setup for Integration Tests
+
+```bash
+# Install Ollama
+curl -fsSL https://ollama.com/install.sh | sh
+
+# Pull a small model that fits in 16GB VRAM
+ollama pull qwen2.5:3b    # ~2GB, good tool calling support
+# or
+ollama pull mistral:7b     # ~4GB, stronger but larger
+
+# Run tests
+LLM_TEST_MODEL=qwen2.5:3b pytest tests/ --run-llm -v
+```
+
+The integration tests use the OpenAI-compatible endpoint that Ollama exposes at `http://localhost:11434/v1`, which routes through the same `OpenAIClient` adapter the production code uses.
 
 ## Code Review Checklist
 
