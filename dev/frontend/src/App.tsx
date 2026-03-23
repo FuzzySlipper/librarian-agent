@@ -296,6 +296,16 @@ function App() {
     const parsed = parseCommand(text);
 
     if (parsed) {
+      // Show the command in chat as a user message
+      const cmdMsg: Message = {
+        id: uuid(),
+        role: "user",
+        content: text,
+        responseType: "command",
+        timestamp: Date.now(),
+      };
+      setMessages((prev) => [...prev, cmdMsg]);
+
       // Build command context
       const ctx: CommandContext = {
         status,
@@ -318,7 +328,7 @@ function App() {
         },
         refreshStatus,
         streamRequest: async (fetcher) => {
-          // Reuse the same streaming UI as doSend
+          // Reuse the same streaming UI as doSend, with text_delta support
           setSending(true);
           setStreamStatus("Connecting...");
           setElapsed(0);
@@ -327,6 +337,10 @@ function App() {
           const abort = new AbortController();
           abortRef.current = abort;
 
+          const reqStreamMsgId = uuid();
+          let reqStreamStarted = false;
+          let reqAccText = "";
+
           try {
             await fetcher(
               (event) => {
@@ -334,7 +348,25 @@ function App() {
                   setStreamStatus(event.data.message as string);
                 } else if (event.type === "tool") {
                   setStreamStatus(`Using ${event.data.name}...`);
+                } else if (event.type === "text_delta") {
+                  reqAccText += event.data.text as string;
+                  if (!reqStreamStarted) {
+                    reqStreamStarted = true;
+                    setStreamStatus(null);
+                    setMessages((prev) => [
+                      ...prev,
+                      { id: reqStreamMsgId, role: "assistant", content: reqAccText, responseType: "streaming", timestamp: Date.now() },
+                    ]);
+                  } else {
+                    const text = reqAccText;
+                    setMessages((prev) =>
+                      prev.map((m) => m.id === reqStreamMsgId ? { ...m, content: text } : m),
+                    );
+                  }
                 } else if (event.type === "done") {
+                  if (reqStreamStarted) {
+                    setMessages((prev) => prev.filter((m) => m.id !== reqStreamMsgId));
+                  }
                   addResponseMessage(
                     event.data.content as string,
                     event.data.response_type as string,
@@ -343,6 +375,9 @@ function App() {
                   setStreamStatus(null);
                   refreshStatus();
                 } else if (event.type === "error") {
+                  if (reqStreamStarted) {
+                    setMessages((prev) => prev.filter((m) => m.id !== reqStreamMsgId));
+                  }
                   addResponseMessage(`Error: ${event.data.message}`, "error");
                   setStreamStatus(null);
                 }
@@ -566,11 +601,14 @@ function App() {
             </div>
           </div>
         )}
-        {messages.map((msg, i) => (
+        {messages.map((msg, i) => {
+          // Compute index excluding system messages (matches backend history indices)
+          const msgIndex = msg.role === "system" ? 0 : messages.slice(0, i + 1).filter((m) => m.role !== "system").length;
+          return (
           <MessageBubble
             key={msg.id}
             message={msg}
-            index={i + 1}
+            index={msgIndex}
             mode={mode}
             onEdit={msg.role !== "system" ? handleEditMessage : undefined}
             onRetry={msg.role !== "system" ? handleRetry : undefined}
@@ -578,7 +616,8 @@ function App() {
             onDelete={msg.role !== "system" ? handleDeleteMessage : undefined}
             onFork={msg.role !== "system" ? handleForkMessage : undefined}
           />
-        ))}
+          );
+        })}
         {sending && (
           <div className="flex items-center gap-2 text-text-muted italic text-sm px-4 py-2">
             <span className="inline-block w-2 h-2 rounded-full bg-accent animate-pulse" />

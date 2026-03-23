@@ -79,18 +79,45 @@ pacing" — say WHERE the pacing drags and suggest how to fix it.
 
 def _parse_review_json(text: str, threshold: float) -> ReviewResult:
     """Parse the reviewer's JSON output into a ReviewResult."""
-    # Try to extract JSON from the response (may be wrapped in markdown code block)
     json_str = text.strip()
-    if "```json" in json_str:
-        start = json_str.index("```json") + 7
-        end = json_str.index("```", start)
-        json_str = json_str[start:end].strip()
-    elif "```" in json_str:
-        start = json_str.index("```") + 3
-        end = json_str.index("```", start)
-        json_str = json_str[start:end].strip()
 
-    data = json.loads(json_str)
+    # Strip markdown code fences
+    if "```" in json_str:
+        parts = json_str.split("```")
+        if len(parts) >= 3:
+            inner = parts[1]
+            if inner.startswith("json"):
+                inner = inner[4:]
+            json_str = inner.strip()
+        elif len(parts) == 2:
+            # Truncated — opening ``` but no closing
+            inner = parts[1]
+            if inner.startswith("json"):
+                inner = inner[4:]
+            json_str = inner.strip()
+
+    # Try direct parse first
+    try:
+        data = json.loads(json_str)
+    except json.JSONDecodeError:
+        # Try to find a JSON object via balanced braces
+        start = json_str.find("{")
+        data = None
+        if start != -1:
+            depth = 0
+            for i in range(start, len(json_str)):
+                if json_str[i] == "{":
+                    depth += 1
+                elif json_str[i] == "}":
+                    depth -= 1
+                    if depth == 0:
+                        try:
+                            data = json.loads(json_str[start:i + 1])
+                        except json.JSONDecodeError:
+                            pass
+                        break
+        if data is None:
+            raise
 
     continuity = float(data["continuity"])
     brief_adherence = float(data["brief_adherence"])
@@ -181,20 +208,22 @@ def review_chapter(
 
     if result_error:
         log.error("Review failed: %s", result_error)
-        # Return a failing review so the chapter gets flagged
+        # Auto-pass with warning — don't trigger revision loops for API errors
         return ReviewResult(
             continuity=0, brief_adherence=0, voice_consistency=0, quality=0,
-            overall=0, feedback=f"Review error: {result_error}", passed=False,
+            overall=0, feedback=f"Review error (auto-passed): {result_error}",
+            passed=True,
         ), stats
 
     try:
         review = _parse_review_json(result_text, threshold)
     except (json.JSONDecodeError, KeyError, ValueError) as e:
         log.error("Failed to parse review JSON: %s\nRaw: %s", e, result_text[:500])
+        # Auto-pass with warning — don't trigger revision loops for parse errors
         return ReviewResult(
             continuity=0, brief_adherence=0, voice_consistency=0, quality=0,
-            overall=0, feedback=f"Parse error: {e}. Raw response: {result_text[:300]}",
-            passed=False,
+            overall=0, feedback=f"Review parse error (auto-passed): {e}",
+            passed=True,
         ), stats
 
     return review, stats

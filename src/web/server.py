@@ -242,8 +242,8 @@ async def chat_stream(request: ChatRequest):
         try:
             for event in _orchestrator.handle_stream(request.message):
                 queue.put(event)
-                # Auto-save after each completed response
-                if event.get("event") == "done":
+                # Auto-save after completed responses and tool executions
+                if event.get("event") in ("done", "tool"):
                     _auto_save()
         except Exception as e:
             queue.put({"event": "error", "message": str(e)})
