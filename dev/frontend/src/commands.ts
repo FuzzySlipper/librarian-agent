@@ -391,9 +391,18 @@ const commands: Record<string, CommandDef> = {
       }
 
       if (sub === "start") {
-        if (!name) return { output: "Usage: `/forge start <project-name>`" };
+        if (!name) return { output: "Usage: `/forge start <project-name> [chapter-count]`" };
+        // Parse optional chapter count from end of args: "/forge start builder 5"
+        const nameParts = name.split(/\s+/);
+        const lastPart = nameParts[nameParts.length - 1];
+        let projectName = name;
+        let maxChapters: number | undefined;
+        if (nameParts.length > 1 && /^\d+$/.test(lastPart)) {
+          maxChapters = parseInt(lastPart);
+          projectName = nameParts.slice(0, -1).join("-");
+        }
         const { sendForgeStream } = await import("./forge");
-        await ctx.streamRequest((onEvent, signal) => sendForgeStream(name, onEvent, signal));
+        await ctx.streamRequest((onEvent, signal) => sendForgeStream(projectName, onEvent, signal, maxChapters));
         return { output: null, streaming: true };
       }
 

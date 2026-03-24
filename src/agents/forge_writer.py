@@ -63,6 +63,62 @@ Guidelines:
 """
 
 
+def _search_drafts(query: str, chapters_dir: Path, max_chars: int = 2000) -> str:
+    """Search existing chapter drafts for content matching a query.
+
+    Returns relevant excerpts or empty string if nothing found.
+    """
+    if not chapters_dir or not chapters_dir.is_dir():
+        return ""
+
+    query_lower = query.lower()
+    keywords = [w for w in query_lower.split() if len(w) > 3]
+    if not keywords:
+        return ""
+
+    matches = []
+    for draft in sorted(chapters_dir.glob("ch-*-draft.md")):
+        try:
+            text = draft.read_text(encoding="utf-8")
+        except Exception:
+            continue
+
+        # Check if any keywords appear in this chapter
+        text_lower = text.lower()
+        score = sum(1 for kw in keywords if kw in text_lower)
+        if score == 0:
+            continue
+
+        # Find the most relevant paragraph
+        paragraphs = text.split("\n\n")
+        best_para = ""
+        best_score = 0
+        for para in paragraphs:
+            para_lower = para.lower()
+            s = sum(1 for kw in keywords if kw in para_lower)
+            if s > best_score:
+                best_score = s
+                best_para = para
+
+        if best_para:
+            ch_name = draft.stem.replace("-draft", "")
+            matches.append((score, ch_name, best_para[:500]))
+
+    if not matches:
+        return ""
+
+    matches.sort(reverse=True)
+    parts = []
+    chars = 0
+    for _, ch_name, excerpt in matches[:3]:
+        if chars + len(excerpt) > max_chars:
+            break
+        parts.append(f"[From {ch_name}]: {excerpt}")
+        chars += len(excerpt)
+
+    return "\n\n".join(parts)
+
+
 def write_chapter(
     *,
     brief: str,
@@ -75,6 +131,7 @@ def write_chapter(
     revision_feedback: str | None = None,
     previous_draft: str | None = None,
     client: LLMClient | None = None,
+    chapters_dir: Path | None = None,
 ) -> tuple[str, dict]:
     """Write (or revise) a single chapter.
 
@@ -145,6 +202,16 @@ def write_chapter(
                 log.info("Forge writer lore query: %s", query)
 
                 lore_bundle = librarian.query(query)
+
+                # If librarian found nothing, search existing chapter drafts
+                if lore_bundle.confidence == "low" and chapters_dir:
+                    draft_context = _search_drafts(query, chapters_dir)
+                    if draft_context:
+                        lore_bundle.relevant_passages.append(draft_context)
+                        lore_bundle.source_files.append("(previous chapters)")
+                        lore_bundle.confidence = "medium"
+                        log.info("Augmented lore with draft context for: %s", query[:60])
+
                 tool_results.append({
                     "type": "tool_result",
                     "tool_use_id": block.id,

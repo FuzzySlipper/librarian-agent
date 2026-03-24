@@ -19,8 +19,10 @@ export async function sendForgeStream(
   project: string,
   onEvent: (event: StreamEvent) => void,
   signal: AbortSignal,
+  maxChapters?: number,
 ): Promise<void> {
-  return _streamForgeEndpoint(`/api/forge/${encodeURIComponent(project)}/start`, onEvent, signal);
+  const params = maxChapters ? `?max_chapters=${maxChapters}` : "";
+  return _streamForgeEndpoint(`/api/forge/${encodeURIComponent(project)}/start${params}`, onEvent, signal);
 }
 
 async function _streamForgeEndpoint(

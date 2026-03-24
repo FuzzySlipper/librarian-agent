@@ -1,43 +1,92 @@
-provider: anthropic
-user_agent: NarrativeOrchestrator/1.0    # Sent with all API requests
+# ── Narrative System Configuration ──
+# Values shown are defaults. Uncomment and change as needed.
+# Restart the server after editing.
 
+# ── Models ──
+# Set these to your provider alias from the Model settings UI.
+# Different agents can use different models/providers.
 models:
-  librarian: claude-haiku-4-5-20251001
-  prose_writer: claude-sonnet-4-6
   orchestrator: claude-sonnet-4-6
+  prose_writer: claude-sonnet-4-6
+  librarian: claude-haiku-4-5-20251001
 
-librarian:
-  max_tokens_per_query: 1024
+# ── Orchestrator ──
+# orchestrator:
+#   max_tokens: 8192             # Max response tokens for chat
+#   delegate_max_tokens: 2048    # Max tokens for delegate_technical tool
 
-prose_writer:
-  max_tokens_per_scene: 4096
-  auto_append_to_story: true
+# ── Librarian (lore retrieval) ──
+# librarian:
+#   max_tokens_per_query: 1024   # Max response tokens for lore queries
+#   max_retries: 2               # Retry count on empty responses
 
+# ── Prose Writer ──
+# prose_writer:
+#   max_tokens_per_scene: 16384  # Max tokens per scene generation
+#   max_continuation_rounds: 3   # Auto-continue rounds if output is truncated
+#   auto_append_to_story: true   # Auto-append prose to story file
+
+# ── StoryForge Pipeline ──
+# forge:
+#   max_revisions: 3             # Max revision attempts per chapter
+#   review_threshold: 7.0        # Score needed to pass review (0.0 - 10.0)
+#   chapter_max_tokens: 8192     # Max tokens per chapter write
+#   planner_max_tokens: 16384    # Max tokens for planner agent
+#   reviewer_max_tokens: 4096    # Max tokens for reviewer agent
+#   pause_after_ch1: true        # Pause for review after first chapter
+#   quality_pass: true           # Run cross-chapter quality review
+#   writer_model:                # Override model for writer (default: prose_writer)
+#   reviewer_model:              # Override model for reviewer (default: librarian)
+#   planner_model:               # Override model for planner (default: orchestrator)
+
+# ── Persona ──
 persona:
   max_tokens: 2000
-  # active: narrator        # Subdirectory of paths.persona to use (omit for root)
+  # active: narrator             # Subdirectory of build/persona/ (omit for root)
 
+# ── Lore ──
 lore:
-  # active: pale-city       # Subdirectory of paths.lore to use (omit for root)
+  # active: my-world             # Subdirectory of build/lore/ (omit for root)
 
+# ── Writing Style ──
 writing_style:
-  active: default            # Filename (without .md) in paths.writing_styles
+  active: default                 # Filename (without .md) in build/writing-styles/
 
+# ── Layout ──
 layout:
-  active: default            # Layout name (without .md) from paths.layouts
+  active: default                 # Layout name (without .md) from build/layouts/
 
-paths:
-  lore: ./build/lore
-  story: ./build/story
-  writing: ./build/writing
-  chats: ./build/chats
-  code_requests: ./docs/code-requests
-  persona: ./build/persona
-  writing_styles: ./build/writing-styles
-  council: ./build/council
-  layouts: ./build/layouts
-  layout_images: ./build/layout-images
-  forge_prompts: ./build/forge-prompts
-  forge: ./build/forge
-  portraits: ./build/portraits
-  data: ./build/data
+# ── Roleplay ──
+# roleplay:
+#   ai_character:                # Character card filename (without .yaml)
+#   user_character:              # User character card filename (without .yaml)
+
+# ── Web Search ──
+# Uncomment and set provider to enable web search tool.
+# web_search:
+#   provider: searxng            # searxng | tavily | brave | google
+#   searxng_url: http://localhost:8888
+#   max_results: 5
+#   tavily_api_key:
+#   brave_api_key:
+#   google_api_key:
+#   google_cx:
+
+# ── Paths ──
+# Override if your content directories are in non-standard locations.
+# paths:
+#   lore: ./build/lore
+#   story: ./build/story
+#   writing: ./build/writing
+#   chats: ./build/chats
+#   persona: ./build/persona
+#   writing_styles: ./build/writing-styles
+#   portraits: ./build/portraits
+#   backgrounds: ./build/backgrounds
+#   character_cards: ./build/character-cards
+#   layouts: ./build/layouts
+#   layout_images: ./build/layout-images
+#   forge: ./build/forge
+#   forge_prompts: ./build/forge-prompts
+#   council: ./build/council
+#   data: ./build/data

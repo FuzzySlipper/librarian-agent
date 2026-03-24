@@ -264,7 +264,7 @@ class ForgeProject:
 
     # ── Pipeline entry point ─────────────────────────────────────────
 
-    def run_design(self, librarian, client=None, resolved_models: dict | None = None) -> Generator[dict, None, None]:
+    def run_design(self, librarian, client=None, clients: dict | None = None, resolved_models: dict | None = None) -> Generator[dict, None, None]:
         """Run only the design stage (planner creates outline, style, briefs, lore).
 
         Args:
@@ -299,7 +299,7 @@ class ForgeProject:
             self._set_stage("design")
             self._record_timing("design", "start")
             yield {"event": "stage", "stage": "design", "message": "Starting design phase..."}
-            yield from self._run_design(librarian, client=client, resolved_models=resolved_models)
+            yield from self._run_design(librarian, clients=clients or {"planner": client}, resolved_models=resolved_models)
             self._record_timing("design", "end")
 
             # Discover chapters from briefs
@@ -319,11 +319,14 @@ class ForgeProject:
         finally:
             _running.discard(self.name)
 
-    def run_pipeline(self, librarian, client=None, resolved_models: dict | None = None) -> Generator[dict, None, None]:
+    def run_pipeline(self, librarian, client=None, clients: dict | None = None, resolved_models: dict | None = None, max_chapters: int | None = None) -> Generator[dict, None, None]:
         """Execute the writing pipeline (stages 3-5), yielding SSE events.
 
+        Args:
+            max_chapters: If set, stop after writing this many chapters in this run.
         Design must be complete before calling this. If not, runs design first.
         """
+        self._max_chapters = max_chapters
         if self.name in _running:
             yield {"event": "error", "message": f"Pipeline already running for {self.name}"}
             return
@@ -331,14 +334,14 @@ class ForgeProject:
         _running.add(self.name)
         try:
             self.load()
-            yield from self._run_pipeline_inner(librarian, client=client, resolved_models=resolved_models)
+            yield from self._run_pipeline_inner(librarian, client=client, clients=clients, resolved_models=resolved_models)
         except Exception as e:
             log.exception("Forge pipeline error for %s", self.name)
             yield {"event": "error", "message": str(e)}
         finally:
             _running.discard(self.name)
 
-    def _run_pipeline_inner(self, librarian, client=None, resolved_models: dict | None = None) -> Generator[dict, None, None]:
+    def _run_pipeline_inner(self, librarian, client=None, clients: dict | None = None, resolved_models: dict | None = None) -> Generator[dict, None, None]:
         assert self.manifest is not None
 
         # ── Stage 2: Design ──────────────────────────────────────────
@@ -346,7 +349,7 @@ class ForgeProject:
             self._set_stage("design")
             self._record_timing("design", "start")
             yield {"event": "stage", "stage": "design", "message": "Starting design phase..."}
-            yield from self._run_design(librarian, client=client, resolved_models=resolved_models)
+            yield from self._run_design(librarian, clients=clients or {"planner": client}, resolved_models=resolved_models)
             self._record_timing("design", "end")
 
             # Reload chapter count from briefs
@@ -371,7 +374,7 @@ class ForgeProject:
             self._set_stage("writing")
             self._record_timing("writing", "start")
             yield {"event": "stage", "stage": "writing", "message": "Starting writing phase..."}
-            yield from self._run_writing(librarian, client=client, resolved_models=resolved_models)
+            yield from self._run_writing(librarian, clients=clients or {"writer": client, "reviewer": client}, resolved_models=resolved_models, max_chapters=getattr(self, '_max_chapters', None))
             self._record_timing("writing", "end")
 
             if self.manifest.paused:
@@ -406,7 +409,7 @@ class ForgeProject:
 
     # ── Stage 2: Design ──────────────────────────────────────────────
 
-    def _run_design(self, librarian, client=None, resolved_models: dict | None = None) -> Generator[dict, None, None]:
+    def _run_design(self, librarian, client=None, clients: dict | None = None, resolved_models: dict | None = None) -> Generator[dict, None, None]:
         """Run the planner agent to produce outline, style, bible, and chapter briefs."""
         from src.agents.forge_planner import run_planner
 
@@ -439,7 +442,7 @@ class ForgeProject:
             model=planner_model,
             max_tokens=self.config.forge.planner_max_tokens,
             stats_callback=self._bump_stats,
-            client=client,
+            client=(clients or {}).get("planner") or client,
         ):
             if event.get("event") == "progress":
                 yield event
@@ -452,7 +455,7 @@ class ForgeProject:
 
     # ── Stage 3: Writing ─────────────────────────────────────────────
 
-    def _run_writing(self, librarian, client=None, resolved_models: dict | None = None) -> Generator[dict, None, None]:
+    def _run_writing(self, librarian, client=None, clients: dict | None = None, resolved_models: dict | None = None, max_chapters: int | None = None) -> Generator[dict, None, None]:
         """Write chapters one by one with review/revise loop."""
         from src.agents.forge_reviewer import review_chapter
         from src.agents.forge_writer import write_chapter
@@ -471,10 +474,18 @@ class ForgeProject:
 
         ch_keys = self._discover_chapters()
         prev_chapter_text = ""
+        chapters_written = 0
 
         for i, ch_key in enumerate(ch_keys):
             # Check pause/resume
             if self.manifest.paused:
+                return
+
+            # Check chapter limit for this run
+            if max_chapters and chapters_written >= max_chapters:
+                yield {"event": "progress", "action": "batch_limit",
+                       "message": f"Batch limit reached ({max_chapters} chapters). "
+                                  f"Run `/forge start` again to continue."}
                 return
 
             ch_status = self.manifest.chapters.get(ch_key)
@@ -498,16 +509,24 @@ class ForgeProject:
                    "message": f"Writing {ch_key}..."}
 
             # ── Write ────────────────────────────────────────────────
-            draft_text, write_stats = write_chapter(
-                brief=brief,
-                style_doc=style_doc,
-                previous_chapter=prev_chapter_text,
-                librarian=librarian,
-                prompts_dir=self.config.paths.forge_prompts,
-                model=writer_model,
-                max_tokens=self.config.forge.chapter_max_tokens,
-                client=client,
-            )
+            try:
+                draft_text, write_stats = write_chapter(
+                    brief=brief,
+                    style_doc=style_doc,
+                    previous_chapter=prev_chapter_text,
+                    librarian=librarian,
+                    prompts_dir=self.config.paths.forge_prompts,
+                    model=writer_model,
+                    max_tokens=self.config.forge.chapter_max_tokens,
+                    client=(clients or {}).get("writer") or client,
+                    chapters_dir=self.chapters_dir,
+                )
+            except Exception as e:
+                log.error("Write failed for %s: %s", ch_key, e)
+                self._update_chapter(ch_key, status="flagged")
+                yield {"event": "progress", "chapter": ch_key, "action": "error",
+                       "message": f"Write failed for {ch_key}: {e}"}
+                continue
 
             draft_path = self.chapters_dir / f"{ch_key}-draft.md"
             draft_path.write_text(draft_text, encoding="utf-8")
@@ -523,17 +542,27 @@ class ForgeProject:
                 yield {"event": "progress", "chapter": ch_key, "action": "review",
                        "message": f"Reviewing {ch_key}..."}
 
-                review_result, review_stats = review_chapter(
-                    chapter_text=draft_text,
-                    brief=brief,
-                    style_doc=style_doc,
-                    previous_chapter=prev_chapter_text,
-                    prompts_dir=self.config.paths.forge_prompts,
-                    model=reviewer_model,
-                    threshold=threshold,
-                    max_tokens=self.config.forge.reviewer_max_tokens,
-                    client=client,
-                )
+                try:
+                    review_result, review_stats = review_chapter(
+                        chapter_text=draft_text,
+                        brief=brief,
+                        style_doc=style_doc,
+                        previous_chapter=prev_chapter_text,
+                        prompts_dir=self.config.paths.forge_prompts,
+                        model=reviewer_model,
+                        threshold=threshold,
+                        max_tokens=self.config.forge.reviewer_max_tokens,
+                        client=(clients or {}).get("reviewer") or client,
+                    )
+                except Exception as e:
+                    log.error("Review call failed for %s: %s", ch_key, e)
+                    from src.models import ReviewResult
+                    review_result = ReviewResult(
+                        continuity=0, brief_adherence=0, voice_consistency=0, quality=0,
+                        overall=0, feedback=f"Review failed (auto-passed): {e}",
+                        passed=True,
+                    )
+                    review_stats = {"input_tokens": 0, "output_tokens": 0, "agent_calls": 1}
                 self._bump_stats(**review_stats)
 
                 # Record feedback
@@ -584,18 +613,25 @@ class ForgeProject:
                        "attempt": revision_count,
                        "message": f"Revising {ch_key} (attempt {revision_count})..."}
 
-                draft_text, write_stats = write_chapter(
-                    brief=brief,
-                    style_doc=style_doc,
-                    previous_chapter=prev_chapter_text,
-                    librarian=librarian,
-                    prompts_dir=self.config.paths.forge_prompts,
-                    model=writer_model,
-                    max_tokens=self.config.forge.chapter_max_tokens,
-                    revision_feedback=review_result.feedback,
-                    previous_draft=draft_text,
-                    client=client,
-                )
+                try:
+                    draft_text, write_stats = write_chapter(
+                        brief=brief,
+                        style_doc=style_doc,
+                        previous_chapter=prev_chapter_text,
+                        librarian=librarian,
+                        prompts_dir=self.config.paths.forge_prompts,
+                        model=writer_model,
+                        max_tokens=self.config.forge.chapter_max_tokens,
+                        revision_feedback=review_result.feedback,
+                        previous_draft=draft_text,
+                        client=(clients or {}).get("writer") or client,
+                        chapters_dir=self.chapters_dir,
+                    )
+                except Exception as e:
+                    log.error("Revision failed for %s: %s", ch_key, e)
+                    yield {"event": "progress", "chapter": ch_key, "action": "error",
+                           "message": f"Revision failed for {ch_key}: {e}"}
+                    break
                 draft_path.write_text(draft_text, encoding="utf-8")
                 self._bump_stats(**write_stats)
                 word_count = len(draft_text.split())
@@ -613,6 +649,7 @@ class ForgeProject:
 
             # Update running context for next chapter
             prev_chapter_text = draft_text
+            chapters_written += 1
 
             # Stats update
             yield {"event": "stats",

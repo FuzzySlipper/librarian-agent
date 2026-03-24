@@ -72,6 +72,7 @@ class ProviderOptions(BaseModel):
     # Provider quirks
     reasoning_content: bool | str = "auto"   # "auto", true, false
     strip_empty_required: bool | str = "auto"
+    num_ctx: int | None = None               # Ollama context window override
     extra_body: dict | None = None
 
 

@@ -108,6 +108,10 @@ async def lifespan(app: FastAPI):
     _config = load_config(config_path=config_path, env_path=env_path)
     _registry = ProviderRegistry(Path(_config.paths.data), user_agent=_config.user_agent)
 
+    # Initialize LLM debug logger
+    from src.utils import llm_logger
+    llm_logger.init(Path(_config.paths.data))
+
     librarian = _create_agent_with_registry(Librarian, _config, _config.models.librarian)
     writer = _create_writer_with_registry(librarian, _config)
     _orchestrator = _create_orchestrator_with_registry(librarian, writer, _config)
@@ -444,6 +448,24 @@ def _resolve_forge_models() -> dict[str, str]:
     ]:
         resolved[role] = _registry.get_model(alias)
     return resolved
+
+
+def _resolve_forge_clients() -> dict:
+    """Resolve a client per forge role from the registry."""
+    if not _registry or not _config:
+        return {}
+    clients = {}
+    for role, alias in [
+        ("planner", _config.forge.planner_model or _config.models.orchestrator),
+        ("writer", _config.forge.writer_model or _config.models.prose_writer),
+        ("reviewer", _config.forge.reviewer_model or _config.models.librarian),
+        ("librarian", _config.models.librarian),
+    ]:
+        try:
+            clients[role] = _registry.get_client(alias)
+        except Exception:
+            pass
+    return clients
 
 
 class ModeRequest(BaseModel):
@@ -1521,49 +1543,115 @@ async def update_agent_models(request: AgentModelUpdate):
 
 
 def _save_config_yaml(config_path: Path, config: AppConfig):
-    """Write current config back to config.yaml, preserving structure."""
+    """Write current config back to config.yaml, preserving comments.
+
+    Instead of parse-dump (which strips comments), we read the raw file,
+    update only the values we manage, and write back with comments intact.
+    New keys are appended at the end of their section.
+    """
+    import re
     import yaml
 
-    # Read existing file to preserve comments and ordering
-    if config_path.exists():
-        with open(config_path) as f:
-            raw = yaml.safe_load(f) or {}
-    else:
-        raw = {}
-
-    def _ensure_dict(key: str) -> dict:
-        """Ensure raw[key] is a dict, even if it was null/missing in YAML."""
-        if not isinstance(raw.get(key), dict):
-            raw[key] = {}
-        return raw[key]
-
-    # Update models section
-    models = _ensure_dict("models")
-    models["orchestrator"] = config.models.orchestrator
-    models["prose_writer"] = config.models.prose_writer
-    models["librarian"] = config.models.librarian
-
-    # Update layout
-    layout = _ensure_dict("layout")
-    layout["active"] = config.layout.active
-
-    # Update lore
-    lore = _ensure_dict("lore")
-    lore["active"] = config.lore.active
-
-    # Update roleplay character cards
-    roleplay = _ensure_dict("roleplay")
-    roleplay["ai_character"] = config.roleplay.ai_character
-    roleplay["user_character"] = config.roleplay.user_character
-
-    # Update web search (if configured)
+    # Values we manage — everything else in the file is left untouched
+    managed = {
+        "models.orchestrator": config.models.orchestrator,
+        "models.prose_writer": config.models.prose_writer,
+        "models.librarian": config.models.librarian,
+        "layout.active": config.layout.active,
+        "lore.active": config.lore.active,
+        "roleplay.ai_character": config.roleplay.ai_character,
+        "roleplay.user_character": config.roleplay.user_character,
+    }
     if config.web_search.provider:
-        search = _ensure_dict("web_search")
-        search["provider"] = config.web_search.provider
+        managed["web_search.provider"] = config.web_search.provider
+
+    if config_path.exists():
+        lines = config_path.read_text(encoding="utf-8").splitlines(keepends=True)
+    else:
+        lines = []
+
+    # Try to update existing lines in-place
+    updated_keys: set[str] = set()
+    current_section = ""
+    new_lines = []
+
+    for line in lines:
+        stripped = line.rstrip()
+
+        # Track which top-level section we're in
+        if stripped and not stripped.startswith("#") and not stripped.startswith(" ") and ":" in stripped:
+            section_name = stripped.split(":")[0].strip()
+            if section_name and not section_name.startswith("-"):
+                current_section = section_name
+
+        # Check if this line is a managed key
+        matched = False
+        if current_section:
+            m = re.match(r"^(\s+)(\w+):\s*(.*?)(\s*#.*)?$", line)
+            if m:
+                indent, key, _old_val, comment = m.groups()
+                full_key = f"{current_section}.{key}"
+                if full_key in managed:
+                    val = managed[full_key]
+                    # Format the value
+                    if val is None:
+                        val_str = ""
+                    elif isinstance(val, bool):
+                        val_str = " true" if val else " false"
+                    elif isinstance(val, str):
+                        val_str = f" {val}" if val else ""
+                    else:
+                        val_str = f" {val}"
+                    comment_str = f"  {comment.strip()}" if comment and comment.strip() else ""
+                    new_lines.append(f"{indent}{key}:{val_str}{comment_str}\n")
+                    updated_keys.add(full_key)
+                    matched = True
+
+        if not matched:
+            new_lines.append(line)
+
+    # Append any managed keys that weren't found in the file
+    for full_key, val in managed.items():
+        if full_key in updated_keys:
+            continue
+        section, key = full_key.split(".", 1)
+        if val is None:
+            continue  # Don't add null values
+
+        # Check if the section header exists
+        section_exists = any(
+            l.rstrip().startswith(f"{section}:") and not l.startswith(" ") and not l.startswith("#")
+            for l in new_lines
+        )
+
+        if isinstance(val, bool):
+            val_str = "true" if val else "false"
+        else:
+            val_str = str(val)
+
+        if section_exists:
+            # Find the last line of this section and insert after it
+            insert_idx = len(new_lines)
+            in_section = False
+            for i, l in enumerate(new_lines):
+                if l.rstrip().startswith(f"{section}:") and not l.startswith(" "):
+                    in_section = True
+                elif in_section and l.strip() and not l.startswith(" ") and not l.startswith("#"):
+                    insert_idx = i
+                    break
+                elif in_section:
+                    insert_idx = i + 1
+            new_lines.insert(insert_idx, f"  {key}: {val_str}\n")
+        else:
+            if new_lines and not new_lines[-1].endswith("\n"):
+                new_lines.append("\n")
+            new_lines.append(f"{section}:\n")
+            new_lines.append(f"  {key}: {val_str}\n")
+
+        updated_keys.add(full_key)
 
     try:
-        with open(config_path, "w") as f:
-            yaml.dump(raw, f, default_flow_style=False, sort_keys=False)
+        config_path.write_text("".join(new_lines), encoding="utf-8")
     except Exception:
         log.exception("Failed to save config to %s", config_path)
 
@@ -1871,14 +1959,12 @@ async def forge_design(project: str):
 
     def _run_design():
         try:
-            # Get client from provider registry so forge uses configured provider
-            # Also resolve model aliases to actual model IDs
-            client = _registry.get_client(_config.models.orchestrator) if _registry else None
             resolved_models = _resolve_forge_models() if _registry else {}
-            librarian_client = _registry.get_client(_config.models.librarian) if _registry else client
+            clients = _resolve_forge_clients() if _registry else {}
+            librarian_client = clients.get("librarian")
             librarian_model = resolved_models.get("librarian")
             librarian = Librarian(_config, client=librarian_client, model=librarian_model)
-            for event in fp.run_design(librarian, client=client, resolved_models=resolved_models):
+            for event in fp.run_design(librarian, clients=clients, resolved_models=resolved_models):
                 queue.put(event)
         except Exception as e:
             queue.put({"event": "error", "message": str(e)})
@@ -1914,7 +2000,7 @@ async def forge_design(project: str):
 
 
 @app.post("/api/forge/{project}/start")
-async def forge_start(project: str):
+async def forge_start(project: str, max_chapters: int | None = None):
     """Start or resume the writing pipeline (design must be done). Returns SSE stream."""
     if _orchestrator is None or _config is None:
         return JSONResponse(status_code=503, content={"error": "System not initialized"})
@@ -1928,12 +2014,12 @@ async def forge_start(project: str):
     def _run_pipeline():
         """Run the forge pipeline in a thread, pushing events to the queue."""
         try:
-            client = _registry.get_client(_config.models.orchestrator) if _registry else None
             resolved_models = _resolve_forge_models() if _registry else {}
-            librarian_client = _registry.get_client(_config.models.librarian) if _registry else client
+            clients = _resolve_forge_clients() if _registry else {}
+            librarian_client = clients.get("librarian")
             librarian_model = resolved_models.get("librarian")
             librarian = Librarian(_config, client=librarian_client, model=librarian_model)
-            for event in fp.run_pipeline(librarian, client=client, resolved_models=resolved_models):
+            for event in fp.run_pipeline(librarian, clients=clients, resolved_models=resolved_models, max_chapters=max_chapters):
                 queue.put(event)
         except Exception as e:
             queue.put({"event": "error", "message": str(e)})

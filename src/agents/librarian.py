@@ -85,21 +85,47 @@ class Librarian:
         """Query the lore corpus and return structured results."""
         log.debug("Librarian query: %s", query)
         from src.utils.safe import safe_first_text
+        from src.utils import llm_logger
         retries = max_retries if max_retries is not None else self.config.librarian.max_retries
 
         for attempt in range(retries + 1):
-            response = self.client.create(
-                model=self.model,
+            llm_logger.log_request(
+                agent="librarian", model=self.model,
                 max_tokens=self.config.librarian.max_tokens_per_query,
-                system=[{
-                    "type": "text",
-                    "text": self.system_prompt,
-                    "cache_control": {"type": "ephemeral"},
-                }],
-                messages=[{"role": "user", "content": query}],
+                system_preview=self.system_prompt[:200],
+                messages_count=1, tools_count=0,
+                extra={"query": query[:200], "attempt": attempt + 1},
             )
 
+            try:
+                response = self.client.create(
+                    model=self.model,
+                    max_tokens=self.config.librarian.max_tokens_per_query,
+                    system=[{
+                        "type": "text",
+                        "text": self.system_prompt,
+                        "cache_control": {"type": "ephemeral"},
+                    }],
+                    messages=[{"role": "user", "content": query}],
+                )
+            except Exception as e:
+                llm_logger.log_error(agent="librarian", model=self.model, error=str(e))
+                if attempt < retries:
+                    import time
+                    time.sleep(1)
+                    continue
+                raise
+
             raw_text = safe_first_text(response.content, context=f"librarian query: {query[:80]}")
+
+            llm_logger.log_response(
+                agent="librarian", model=self.model,
+                stop_reason=response.stop_reason,
+                content_preview=raw_text[:500] if raw_text else "(empty)",
+                input_tokens=response.usage.input_tokens if response.usage else 0,
+                output_tokens=response.usage.output_tokens if response.usage else 0,
+                content_blocks=response.content,
+            )
 
             if raw_text.strip():
                 return self._parse_response(raw_text)
@@ -108,7 +134,7 @@ class Librarian:
                 log.warning("Librarian empty response (attempt %d/%d), retrying: %s",
                             attempt + 1, retries + 1, query[:80])
                 import time
-                time.sleep(1)  # Brief pause before retry
+                time.sleep(1)
 
         return LoreBundle(
             relevant_passages=["No information found for this query."],
@@ -157,7 +183,7 @@ class Librarian:
                             pass
                         break
 
-        log.warning("Failed to parse Librarian response as JSON, wrapping as raw passage")
+        log.debug("Librarian response not JSON, wrapping as raw passage (this is normal for local models)")
         return LoreBundle(
             relevant_passages=[raw_text],
             source_files=[],

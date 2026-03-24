@@ -167,6 +167,13 @@ def _convert_response(response) -> LLMResponse:
     if message.content:
         content.append(TextBlock(text=message.content))
 
+    # Some reasoning models (qwen3.5) put all output in reasoning_content
+    # with empty content. If content is empty but reasoning exists and there
+    # are no tool calls, promote reasoning to content so callers get text.
+    reasoning_text = getattr(message, "reasoning_content", None) or getattr(message, "reasoning", None)
+    if not message.content and not message.tool_calls and reasoning_text:
+        content.append(TextBlock(text=reasoning_text))
+
     if message.tool_calls:
         for tc in message.tool_calls:
             try:
@@ -352,8 +359,15 @@ class OpenAIClient(LLMClient):
                 call_kwargs["presence_penalty"] = opts.presence_penalty
             if opts.seed is not None:
                 call_kwargs["seed"] = opts.seed
+            # Ollama-specific: set context window size
+            if opts.num_ctx:
+                extra = call_kwargs.get("extra_body") or {}
+                extra["num_ctx"] = opts.num_ctx
+                call_kwargs["extra_body"] = extra
             if opts.extra_body:
-                call_kwargs["extra_body"] = opts.extra_body
+                existing = call_kwargs.get("extra_body") or {}
+                existing.update(opts.extra_body)
+                call_kwargs["extra_body"] = existing
 
         return call_kwargs
 
