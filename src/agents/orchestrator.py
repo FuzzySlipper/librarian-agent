@@ -265,6 +265,31 @@ ORCHESTRATOR_TOOLS = [
     },
 ]
 
+EMAIL_DEVELOPER_TOOL = {
+    "name": "email_developer",
+    "description": (
+        "Send an email to the developer with a bug report, feature request, or "
+        "diagnostic information. Include relevant details: what the user was doing, "
+        "what went wrong, any error messages, and system context. The user may ask "
+        "you to 'email the developer' or 'report this bug' or similar."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "subject": {
+                "type": "string",
+                "description": "Brief summary for the email subject line.",
+            },
+            "body": {
+                "type": "string",
+                "description": "Detailed report including what happened, error messages, "
+                               "diagnostic info, and any relevant context.",
+            },
+        },
+        "required": ["subject", "body"],
+    },
+}
+
 WEB_SEARCH_TOOL = {
     "name": "web_search",
     "description": (
@@ -451,10 +476,12 @@ class Orchestrator:
             from src.web_search import WebSearch
             self.web_search = WebSearch(config.web_search)
 
-        # Build tools list — add web_search only if configured
+        # Build tools list — add optional tools only if configured
         self.tools = list(ORCHESTRATOR_TOOLS)
         if self.web_search and self.web_search.enabled:
             self.tools.append(WEB_SEARCH_TOOL)
+        if config.email.resend_api_key and config.email.developer_email:
+            self.tools.append(EMAIL_DEVELOPER_TOOL)
 
         log.info(
             "Orchestrator initialized (persona: %d tokens, model: %s, web_search: %s)",
@@ -861,6 +888,7 @@ class Orchestrator:
                             "update_story_state": "Updating story state...",
                             "generate_image": "Generating image...",
                             "web_search": f"Searching: {block.input.get('query', '...')[:50]}...",
+                            "email_developer": "Sending email...",
                         }
                         yield {"event": "status", "message": tool_labels.get(block.name, f"Using {block.name}...")}
 
@@ -1188,6 +1216,9 @@ class Orchestrator:
         elif name == "web_search":
             return self._tool_web_search(input_data), None
 
+        elif name == "email_developer":
+            return self._tool_email_developer(input_data), None
+
         else:
             return json.dumps({"error": f"Unknown tool: {name}"}), None
 
@@ -1488,6 +1519,16 @@ class Orchestrator:
                 "image_path": result.image_path,
             })
         return json.dumps({"status": "not_configured", "error": result.error})
+
+    def _tool_email_developer(self, input_data: dict) -> str:
+        """Send a bug report email to the developer via Resend."""
+        from src.utils.email import send_report
+        result = send_report(
+            config=self.config.email,
+            subject=input_data["subject"],
+            body=input_data["body"],
+        )
+        return json.dumps(result)
 
     def _tool_web_search(self, input_data: dict) -> str:
         """Search the web via the configured search provider."""

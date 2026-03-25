@@ -61,6 +61,13 @@ layout:
 #   ai_character:                # Character card filename (without .yaml)
 #   user_character:              # User character card filename (without .yaml)
 
+# ── Email (bug reports to developer) ──
+# Uncomment to allow users to email you bug reports via the chat agent.
+# email:
+#   resend_api_key: re_xxxxxxxxxxxx
+#   developer_email: you@example.com
+#   from_email: noreply@resend.dev    # Resend default sender (or your verified domain)
+
 # ── Web Search ──
 # Uncomment and set provider to enable web search tool.
 # web_search:

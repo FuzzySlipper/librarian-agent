@@ -106,6 +106,12 @@ class RoleplayConfig(BaseModel):
     user_character: str | None = None  # Filename (without .yaml) of the user character card
 
 
+class EmailConfig(BaseModel):
+    resend_api_key: str | None = None
+    developer_email: str | None = None  # Where bug reports go
+    from_email: str = "noreply@resend.dev"  # Resend default sender
+
+
 class WebSearchConfig(BaseModel):
     provider: str | None = None  # "searxng", "tavily", "brave", "google" — None = disabled
     searxng_url: str = "http://localhost:8888"  # SearXNG instance URL
@@ -150,6 +156,7 @@ class AppConfig(BaseModel):
     lore: LoreConfig = Field(default_factory=LoreConfig)
     writing_style: WritingStyleConfig = Field(default_factory=WritingStyleConfig)
     layout: LayoutPrefsConfig = Field(default_factory=LayoutPrefsConfig)
+    email: EmailConfig = Field(default_factory=EmailConfig)
     web_search: WebSearchConfig = Field(default_factory=WebSearchConfig)
     roleplay: RoleplayConfig = Field(default_factory=RoleplayConfig)
     forge: ForgeConfig = Field(default_factory=ForgeConfig)
